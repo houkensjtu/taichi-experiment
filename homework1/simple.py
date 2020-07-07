@@ -54,6 +54,14 @@ def fill_v():
 def fill_bc():
     for i, j, k in ti.ndrange(nx, ny, 4):
         bc[i, j][k] = 0
+    for j in range(ny):
+        bc[0, j][0] = 1
+        bc[nx - 1, j][2] = 1
+    for i in range(nx):
+        bc[i, 0][1] = 1
+        bc[i, ny - 1][3] = 1
+    for i, j, k in ti.ndrange(nx, ny, 4):
+        print("bc[", i, ",", j, ",", k, "] = ", bc[i, j][k])
 
 
 @ti.kernel
