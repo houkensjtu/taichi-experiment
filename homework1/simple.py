@@ -4,11 +4,11 @@ import matplotlib.cm as cm
 
 ti.init()
 
-lx = 10.
-ly = 2.
+lx = 1.
+ly = 0.2
 
-nx = 100
-ny = 20
+nx = 200
+ny = 40
 
 p = ti.var(dt=ti.f32, shape=(nx, ny))
 
@@ -30,7 +30,8 @@ dy = ly / ny
 dt = 0.01
 
 Au = ti.var(dt=ti.f32, shape=((nx + 1) * ny, (nx + 1) * ny))
-bu = ti.var(dt=ti.f32, shape=((nx + 1) * ny, 1))
+bu = ti.var(dt=ti.f32, shape=((nx + 1) * ny))
+xu = ti.var(dt=ti.f32, shape=((nx + 1) * ny))
 
 
 @ti.kernel
@@ -61,7 +62,28 @@ def fill_bc():
         bc[i, 0][1] = 1
         bc[i, ny - 1][3] = 1
     for i, j, k in ti.ndrange(nx, ny, 4):
-        print("bc[", i, ",", j, ",", k, "] = ", bc[i, j][k])
+        #print("bc[", i, ",", j, ",", k, "] = ", bc[i, j][k])
+        pass
+
+
+def fill_xu():
+    for i, j in ti.ndrange(nx + 1, ny):
+        xu[i * ny + j] = u[i, j]
+
+
+def fill_Au():
+    for i, j in ti.ndrange(nx, ny):
+        k = i * ny + j
+        if bc[i, j][0] == 1:
+            Au[k, k] = 1.0
+            bu[k] = u[i, j]
+        elif bc[i, j][2] == 1:
+            Au[k + ny, k + ny] = 1.0
+            bu[k + ny] = u[i + 1, j]
+        elif bc[i, j][1] == 1:
+            Au[k, k - 1] = mu * dx / dy + max(
+                [0, -rho * 0.5 * (v[i - 1, j] + v[i, j] * dx)])
+            print("i=", i, "j= ", j, "k= ", k, Au[k, k - 1])
 
 
 @ti.kernel
@@ -87,10 +109,14 @@ def display():
         gui.show()
 
 
-fill_p()
-fill_u()
-fill_v()
-post_u()
-post_v()
-fill_bc()
-display()
+if __name__ == "__main__":
+    fill_p()
+    fill_u()
+    fill_v()
+    fill_xu()
+    fill_bc()
+    fill_Au()
+    post_u()
+    post_v()
+
+    display()
