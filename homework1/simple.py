@@ -7,8 +7,8 @@ ti.init()
 lx = 1.
 ly = 0.2
 
-nx = 200
-ny = 40
+nx = 10
+ny = 4
 
 p = ti.var(dt=ti.f32, shape=(nx, ny))
 
@@ -78,12 +78,59 @@ def fill_Au():
             Au[k, k] = 1.0
             bu[k] = u[i, j]
         elif bc[i, j][2] == 1:
+            # i = nx-1, j = [0,ny-1] => k = (nx-1) * ny + [0,ny-1]
+            # k + ny :=> nx*ny, (nx+1)*ny-1
             Au[k + ny, k + ny] = 1.0
             bu[k + ny] = u[i + 1, j]
         elif bc[i, j][1] == 1:
-            Au[k, k - 1] = mu * dx / dy + max(
-                [0, -rho * 0.5 * (v[i - 1, j] + v[i, j] * dx)])
-            print("i=", i, "j= ", j, "k= ", k, Au[k, k - 1])
+            Au[k, k - 1] = 0.0  # an
+            Au[k, k + 1] = -mu * dx / dy - max(
+                [0, rho * 0.5 * (v[i - 1, j + 1] + v[i, j + 1] * dx)])  # as
+            Au[k, k -
+               ny] = -mu * dy / dx - max([0, rho * 0.5 *
+                                          (u[i, j] + u[i - 1])])  # aw
+            Au[k, k + ny] = -mu * dy / dx - max(
+                [0, -rho * 0.5 * (u[i, j] + u[i + 1])])  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - Au[
+                k, k + ny] + 2 * mu  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy
+        elif bc[i, j][3] == 1:
+            Au[k, k - 1] = -mu * dx / dy - max(
+                [0, -rho * 0.5 * (v[i - 1, j] + v[i, j] * dx)])  # an
+            Au[k, k + 1] = 0.0  # as
+            Au[k, k -
+               ny] = -mu * dy / dx - max([0, rho * 0.5 *
+                                          (u[i, j] + u[i - 1])])  # aw
+            Au[k, k + ny] = -mu * dy / dx - max(
+                [0, -rho * 0.5 * (u[i, j] + u[i + 1])])  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - Au[
+                k, k + ny] + 2 * mu  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy
+        else:
+            Au[k, k - 1] = -mu * dx / dy - max(
+                [0, -rho * 0.5 * (v[i - 1, j] + v[i, j] * dx)])  # an
+            Au[k, k +
+               1] = -mu * dy / dx - max([0, rho * 0.5 *
+                                         (u[i, j] + u[i - 1])])  # as
+            Au[k, k -
+               ny] = -mu * dy / dx - max([0, rho * 0.5 *
+                                          (u[i, j] + u[i - 1])])  # aw
+            Au[k, k + ny] = -mu * dy / dx - max(
+                [0, -rho * 0.5 * (u[i, j] + u[i + 1])])  # ae
+            Au[k,
+               k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - Au[k, k +
+                                                                      ny]  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy
+
+
+def solve_u():
+    A = Au.to_numpy()
+    b = bu.to_numpy()
+    print(A.shape)
+    print(b.shape)
+    for i, j in ti.ndrange(1, 44):
+        print(A[i, j])
+    x = np.linalg.solve(A, b)
 
 
 @ti.kernel
@@ -118,5 +165,7 @@ if __name__ == "__main__":
     fill_Au()
     post_u()
     post_v()
+
+    solve_u()
 
     display()
