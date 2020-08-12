@@ -7,8 +7,8 @@ ti.init()
 lx = 1.0
 ly = 0.3
 
-nx = 60
-ny = 25
+nx = 120
+ny = 30
 
 velo_rel = 0.01
 p_rel = 0.03
@@ -17,13 +17,12 @@ p_rel = 0.03
 p = ti.var(dt=ti.f32, shape=(nx + 2, ny + 2))
 pcor = ti.var(dt=ti.f32, shape=(nx + 2, ny + 2))
 
-# Velocity divergence
-mdiv = ti.var(dt=ti.f32, shape=(nx + 2, ny + 2))
-
 u = ti.var(dt=ti.f32, shape=(nx + 3, ny + 2))
+u0 = ti.var(dt=ti.f32, shape=(nx + 3, ny + 2))
 u_post = ti.var(dt=ti.f32, shape=(nx + 2, ny + 2))
 
 v = ti.var(dt=ti.f32, shape=(nx + 2, ny + 3))
+v0 = ti.var(dt=ti.f32, shape=(nx + 2, ny + 3))
 v_post = ti.var(dt=ti.f32, shape=(nx + 2, ny + 2))
 
 # ct stands for Cell Type.
@@ -56,8 +55,10 @@ def init():
         mdiv[i, j] = 0.0
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
+        u0[i, j] = u[i, j]
     for i, j in ti.ndrange(nx + 2, ny + 3):
         v[i, j] = 0.0
+        v0[i, j] = v[i, j]
 
     for i, j in ti.ndrange(nx + 2, ny + 2):
         ct[i, j] = 1  # "1" stands for solid
@@ -65,9 +66,11 @@ def init():
         ct[i, j] = -1  # "-1" stands for fluid
 
     for i, j in ti.ndrange((35, 40), (14, 18)):
-        #ct[i, j] = 1
-        #u[i, j] = 0
-        #v[i, j] = 0
+        ct[i, j] = 1
+        u[i, j] = 0
+        u0[i, j] = 0
+        v[i, j] = 0
+        v0[i, j] = 0
         pass
 
 
@@ -99,7 +102,7 @@ def fill_Au():
             Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - Au[
                 k, k + ny] + rho * dx * dy / dt  # ap
             bu[k] = (p[i - 1, j] - p[i, j]
-                     ) * dy + rho * dx * dy / dt * u[i, j]  # <= Unsteady term
+                     ) * dy + rho * dx * dy / dt * u0[i, j]  # <= Unsteady term
 
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
@@ -137,7 +140,8 @@ def fill_Av():
                 [0, -rho * 0.5 * (u[i + 1, j - 1] + u[i + 1, j]) * dy])  # ae
             Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] - Av[
                 k, k + ny + 1] + rho * dx * dy / dt  # ap
-            bv[k] = (p[i, j] - p[i, j - 1]) * dx + rho * dx * dy / dt * v[i, j]
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + rho * dx * dy / dt * v0[i,
+                                                                           j]
 
 
 def solve_axb(A, b):
@@ -164,7 +168,7 @@ def xv_back():
 
 
 def solve_moment_x():
-
+    fill_Au()
     # solve_axb returns a numpy array
     # needs to convert back to taichi
     import numpy.linalg as npl
@@ -175,7 +179,7 @@ def solve_moment_x():
 
 
 def solve_moment_y():
-
+    fill_Av()
     import numpy.linalg as npl
     print("Shape of Av is", Av.shape(), "Rank of Av is:",
           npl.matrix_rank(Av.to_numpy()))
@@ -235,13 +239,6 @@ def check_uconserv():
     print("Inlet flux = ", inlet_flux, "; Outlet flux = ", outlet_flux)
 
 
-def mass_div():
-    for i, j in ti.ndrange(nx + 2, ny + 2):
-        mdiv[i, j] = rho * dy * (u[i + 1, j] -
-                                 u[i, j]) + rho * dx * (v[i, j] - v[i, j + 1])
-    visual(mdiv)
-
-
 def fill_Ap():
     for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
@@ -268,7 +265,7 @@ def fill_Ap():
 
 
 def solve_pcor():
-
+    fill_Ap()
     import numpy.linalg as npl
     print("Shape of Ap is", Ap.shape(), "Rank of Ap is:",
           npl.matrix_rank(Ap.to_numpy()))
@@ -339,14 +336,8 @@ if __name__ == "__main__":
 
     check_uconserv()
     for jter in range(1000):
-        fill_Au()
-        fill_Av()
-        fill_Ap()
         print("Solving the outer loop", jter, "th iteration...")
-        iter = 0
-        resu = 1
-        resv = 1
-        for iter in range(50):
+        for iter in range(10):
             print("Solving the inner loop", iter, "th iteration...")
             solve_moment_x()
             solve_moment_y()
@@ -355,8 +346,8 @@ if __name__ == "__main__":
             solve_pcor()
             resu = correct_u()
             resv = correct_v()
-            print("Resu = ", resu, "; Resv = ", resv)
-            iter = iter + 1
+        u0 = u
+        v0 = v
         display()
     #u_img = cm.terrain(u.to_numpy())
     #gui.set_image(u_img)
