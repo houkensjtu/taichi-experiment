@@ -5,7 +5,7 @@ from scipy.sparse.linalg import bicgstab
 from scipy.sparse.linalg import cg
 import time
 
-n = 1000
+n = 10000
 
 A = np.zeros((n, n))
 b = np.zeros(n)
@@ -22,19 +22,20 @@ def init():
             else:
                 A[i, j] = 0.0
 
-    A[0, 0] = 1.0
-    A[0, 1] = 0.0
-    A[n-1, n-1] = 1.0
+    # A[0, 0] = 1.0
+    # A[0, 1] = 0.0
+    
+    A[n-1, n-1] = 1.0    
     A[n-1, n-2] = 0.0
+    
     for i in range(n):
         b[i] = 0.0
         x[i] = 0.0
     b[0] = 100
     b[n-1] = 0
-    # print("Converting...")
-    A_sparse = csc_matrix(A)
-    b_sparse = csc_matrix(b)
 
+def is_pos_def(x):
+    return np.all(np.linalg.eigvals(x) > 0)    
 
 def disp():
     global x
@@ -82,6 +83,7 @@ def conjgrad(A, b, x):
             break
         p = r + (rsnew/rsold)*p
         rsold = rsnew
+        print("Iter = ", i, "Residual = ", rsold)
     return x
 
 
@@ -115,21 +117,27 @@ def main2():
     init()
     print("Solving using numpy solve...")
     x = numsolve()
-    # for i in range(n):
-    #print("x[", i, "] = ", x[i])
+    for i in range(n):
+        print("x[", i, "] = ", x[i])
 
 
 def main3():
     init()
     print("Solving using bicg...")
     x = bicgsolve()
+    for i in range(n):
+        print("x[", i, "] = ", x[i])
+
 
 
 def main4():
     init()
     x = custom_cg()
+    for i in range(n):
+        print("x[", i, "] = ", x[i])
 
 
 start = time.time()
+print(is_pos_def(A))
 main4()
 print(time.time()-start)
