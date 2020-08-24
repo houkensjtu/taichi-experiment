@@ -47,20 +47,23 @@ Ap = ti.var(dt=ti.f32, shape=(nx * ny, nx * ny))
 bp = ti.var(dt=ti.f32, shape=(nx * ny))
 xp = ti.var(dt=ti.f32, shape=(nx * ny))
 
+
 @ti.func
 def init():
     print(" ...for i,j in ndrange...")
     for i, j in ti.ndrange(nx + 2, ny + 2):
         p[i, j] = 100 - i / nx
-        print("P at i =", i, "j =", j, " = ", p[i,j])
+        print("P at i =", i, "j =", j, " = ", p[i, j])
     print(" ...for i,j in p...")
     for i, j in p:
         p[i, j] = 100 - i / nx
-        print("P at i =", i, "j =", j, " = ", p[i,j])
+        print("P at i =", i, "j =", j, " = ", p[i, j])
+
 
 @ti.kernel
 def main():
-     init()
+    init()
 
-if __name__=="__main__":
-     main()     
+
+if __name__ == "__main__":
+    main()

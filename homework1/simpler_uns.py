@@ -288,7 +288,7 @@ def visual(mat):
     import matplotlib.pyplot as plt
     # 'nearest' interpolation - faithful but blocky
     plt.imshow(A, interpolation='nearest', cmap=cm.rainbow)
-    #plt.colorbar()
+    # plt.colorbar()
     # plt.show()
     plt.savefig("karmen" + str(iter) + ".png", dpi=300)
 
@@ -350,6 +350,6 @@ if __name__ == "__main__":
         v0 = v
         display()
     #u_img = cm.terrain(u.to_numpy())
-    #gui.set_image(u_img)
+    # gui.set_image(u_img)
     #filename = f'frame_{iter:05d}.png'
-    #gui.show(filename)
+    # gui.show(filename)

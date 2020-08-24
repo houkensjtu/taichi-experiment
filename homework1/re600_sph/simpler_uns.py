@@ -7,8 +7,8 @@ ti.init()
 lx = 1.5
 ly = 0.3
 
-nx = 200
-ny = 60
+nx = 100
+ny = 30
 
 velo_rel = 0.01
 p_rel = 0.03
@@ -148,11 +148,12 @@ def fill_Av():
 
 
 def solve_axb(A, b):
-    #from scipy.sparse.linalg import qmr, bicg
+    from scipy.sparse.linalg import qmr, bicg
+    from scipy.sparse import csc_matrix
     A_np = A.to_numpy()
     b_np = b.to_numpy()
     return np.linalg.solve(A_np, b_np)
-    #ans, exitCode = bicg(A_np, b_np, atol='legacy', tol=0.1)
+    #ans, exitCode = bicg(A_np, b_np, atol='legacy', tol=1e-3)
     # return ans
 
 
@@ -182,8 +183,8 @@ def iter_solve_u():
         res = 0.0
         for i, j in ti.ndrange(nx + 1, ny):
             k = i * ny + j
-            #print("k = ", k, "ny = ", ny, "k-ny = ", k - ny, "Au[k-ny] = ",
-            #Au[k - ny])
+            # print("k = ", k, "ny = ", ny, "k-ny = ", k - ny, "Au[k-ny] = ",
+            # Au[k - ny])
             xu[k] = 1 / Au[k, k] * (-Au[k, k - 1] * u[i, j - 1] -
                                     Au[k, k + 1] * u[i, j + 1] -
                                     Au[k, k - ny] * u[i - 1, j] -
@@ -206,8 +207,8 @@ def iter_solve_v():
         res = 0.0
         for i, j in ti.ndrange(nx, ny + 1):
             k = i * (ny + 1) + j
-            #print("k = ", k, "ny = ", ny, "k-ny = ", k - ny, "Au[k-ny] = ",
-            #Au[k - ny])
+            # print("k = ", k, "ny = ", ny, "k-ny = ", k - ny, "Au[k-ny] = ",
+            # Au[k - ny])
             xv[k] = 1 / Av[k, k] * (-Av[k, k - 1] * v[i, j - 1] -
                                     Av[k, k + 1] * v[i, j + 1] -
                                     Av[k, k - ny - 1] * v[i - 1, j] -
@@ -227,10 +228,10 @@ def solve_moment_x():
     # solve_axb returns a numpy array
     # needs to convert back to taichi
     #import numpy.linalg as npl
-    #print("Shape of Au is", Au.shape(), "Rank of Au is:",
+    # print("Shape of Au is", Au.shape(), "Rank of Au is:",
     #      npl.matrix_rank(Au.to_numpy()))
     xu.from_numpy(solve_axb(Au, bu))
-    #iter_solve_u()
+    # iter_solve_u()
     sol_back_matrix(u, xu)
 
 
@@ -238,10 +239,10 @@ def solve_moment_y():
     fill_Av()
     print("Solving y momentum...")
     #import numpy.linalg as npl
-    #print("Shape of Av is", Av.shape(), "Rank of Av is:",
+    # print("Shape of Av is", Av.shape(), "Rank of Av is:",
     #      npl.matrix_rank(Av.to_numpy()))
     xv.from_numpy(solve_axb(Av, bv))
-    #iter_solve_v()
+    # iter_solve_v()
     sol_back_matrix(v, xv)
 
 
@@ -325,7 +326,7 @@ def fill_Ap():
 def solve_pcor():
     fill_Ap()
     #import numpy.linalg as npl
-    #print("Shape of Ap is", Ap.shape(), "Rank of Ap is:",
+    # print("Shape of Ap is", Ap.shape(), "Rank of Ap is:",
     #      npl.matrix_rank(Ap.to_numpy()))
     sumbp = 0.0
     for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
@@ -349,7 +350,7 @@ def visual(mat):
     import matplotlib.pyplot as plt
     # 'nearest' interpolation - faithful but blocky
     plt.imshow(A, interpolation='nearest', cmap=cm.rainbow)
-    #plt.colorbar()
+    # plt.colorbar()
     # plt.show()
     plt.savefig("karmen" + str(iter) + ".png", dpi=300)
 
