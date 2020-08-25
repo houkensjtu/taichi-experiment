@@ -3,7 +3,7 @@ import random
 
 ti.init(default_fp=ti.f64)
 
-n = 100
+n = 20
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -39,6 +39,13 @@ def residual() -> ti.f32:
     return res
 
 
+@ti.kernel
+def print_A():
+    for i in range(n):
+        for j in range(n):
+            print("A[", i, ",", j, "] = ", A[i, j])
+
+
 for i in range(n):
     for j in range(n):
         A[i, j] = random.random() - 0.5
@@ -47,8 +54,13 @@ for i in range(n):
 
     b[i] = random.random() * 100
 
-for i in range(100):
+print_A()
+res = residual()
+i = 0
+while res > 1.0e-8:
+    i += 1
     iterate()
+    res = residual()
     print(f'iter {i}, residual={residual():0.10f}')
 
 for i in range(n):

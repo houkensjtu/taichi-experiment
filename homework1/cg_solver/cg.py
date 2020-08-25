@@ -3,7 +3,7 @@ import random
 
 ti.init(default_fp=ti.f64)
 
-n = 100
+n = 1000
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -17,7 +17,7 @@ Ax = ti.field(dtype=ti.f64, shape=n)
 Ap = ti.field(dtype=ti.f64, shape=n)
 
 
-@ti.func
+@ti.kernel
 def init():
     for i, j in A:
         if i == j:
@@ -27,10 +27,10 @@ def init():
         else:
             A[i, j] = 0.0
 
-    A[0, 0] = 1.0
-    A[0, 1] = 0.0
+    #A[0, 0] = 1.0
+    #A[0, 1] = 0.0
     A[n - 1, n - 1] = 1.0
-    A[n - 1, n - 2] = 0.0
+    #A[n - 1, n - 2] = 0.0
     for i in b:
         b[i] = 0.0
         x[i] = 0.0
@@ -40,11 +40,12 @@ def init():
     b[n - 1] = 0
 
 
-@ti.func
+# @ti.func
 def init_rand():
     for i in range(n):
         for j in range(n):
             A[i, j] = random.random() - 0.5
+            # A[i, j] = random.random() - 0.5            
         A[i, i] += n * 0.1
         b[i] = random.random() * 100
 
@@ -56,6 +57,19 @@ def print_A():
             print("A[", i, ",", j, "] = ", A[i, j])
 
 
+@ti.func
+def check_sol():
+    res = 0.0
+    r = 0.0
+    for i in range(n):
+        r = b[i]
+        for j in range(n):
+            r -= A[i,j] * x[j]
+#    for i in range(n):
+        res += r * r
+    return res
+
+        
 @ti.func
 def jacobian_solve():
     res = 0.0
@@ -79,12 +93,19 @@ def full_jacobian():
         x[i] = r / A[i, i]
     # for i in range(n):
     #    x[i] = x_new[i]
+    
     res = 0.0
+
     for i in range(n):
+        
         r = b[i] * 1.0
         for j in range(n):
             r -= A[i, j] * x[j]
         res += r * r
+#        print("x[",i,"] = ", x[i])
+
+#    res = check_sol()
+#    print("In the check...", res)
     return res
 
 
@@ -115,7 +136,7 @@ def conjgrad():
     for i in range(n):
         rsold += r[i] * r[i]
 
-    for _ in range(10000):
+    for _ in range(100000000):
         # dot(A,p)
         for i in range(n):
             Ap[i] = 0.0
@@ -139,7 +160,7 @@ def conjgrad():
         for i in range(n):
             rsnew += r[i] * r[i]
 
-        if ti.sqrt(rsnew) < 1e-3:
+        if ti.sqrt(rsnew) < 1e-8:
             break
 
         for i in range(n):
@@ -150,12 +171,13 @@ def conjgrad():
 
 @ti.kernel
 def main():
-    init_rand()
-    # conjgrad()
-    jacobian_iterate()
+    # print_A()
+    conjgrad()
+    # jacobian_iterate()
+#    res = check_sol()
+    print("The final residual is ", check_sol())
     for i in range(n):
-        pass
-        #print("x[", i, "] = ", x[i])
+        print("After solved, x[",i,"] = ", x[i])
 
-
+init()
 main()
