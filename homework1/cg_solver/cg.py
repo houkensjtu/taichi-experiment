@@ -3,7 +3,7 @@ import random
 
 ti.init(default_fp=ti.f64)
 
-n = 1000
+n = 100
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -27,10 +27,10 @@ def init():
         else:
             A[i, j] = 0.0
 
-    #A[0, 0] = 1.0
-    #A[0, 1] = 0.0
-    A[n - 1, n - 1] = 1.0
-    #A[n - 1, n - 2] = 0.0
+    # A[0, 0] = 1.0
+    # A[0, 1] = 0.0
+    # A[n - 1, n - 1] = 1.0
+    # A[n - 1, n - 2] = 0.0
     for i in b:
         b[i] = 0.0
         x[i] = 0.0
@@ -65,7 +65,6 @@ def check_sol():
         r = b[i]
         for j in range(n):
             r -= A[i,j] * x[j]
-#    for i in range(n):
         res += r * r
     return res
 
@@ -89,21 +88,20 @@ def full_jacobian():
         for j in range(n):
             if i != j:
                 r -= A[i, j] * x[j]
-        #x_new[i] = r / A[i, i]
+        x_new[i] = r / A[i, i]
         x[i] = r / A[i, i]
-    # for i in range(n):
-    #    x[i] = x_new[i]
+    for i in range(n):
+        x[i] = x_new[i]
     
     res = 0.0
 
     for i in range(n):
-        
         r = b[i] * 1.0
         for j in range(n):
             r -= A[i, j] * x[j]
         res += r * r
-#        print("x[",i,"] = ", x[i])
-
+        
+#    print("x[",i,"] = ", x[i])
 #    res = check_sol()
 #    print("In the check...", res)
     return res
