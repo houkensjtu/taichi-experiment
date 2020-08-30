@@ -3,7 +3,7 @@ import time
 
 ti.init(default_fp=ti.f64, arch=ti.cpu)
 
-n = 1000
+n = 100
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 b = ti.field(dtype=ti.f64, shape=n)

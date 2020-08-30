@@ -1,9 +1,10 @@
 import taichi as ti
 import random
+import time
 
 ti.init(default_fp=ti.f64)
 
-n = 100
+n = 1024
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -26,26 +27,20 @@ def init():
             A[i, j] = -1.0
         else:
             A[i, j] = 0.0
-
-    # A[0, 0] = 1.0
-    # A[0, 1] = 0.0
-    # A[n - 1, n - 1] = 1.0
-    # A[n - 1, n - 2] = 0.0
-    for i in b:
+    for i in x:
         b[i] = 0.0
         x[i] = 0.0
         Ax[i] = 0.0
         Ap[i] = 0.0
-    b[0] = 100
-    b[n - 1] = 0
+    b[0] = 100.0
+    b[n - 1] = 0.0
 
 
-# @ti.func
+# @ti.kernel
 def init_rand():
     for i in range(n):
         for j in range(n):
             A[i, j] = random.random() - 0.5
-            # A[i, j] = random.random() - 0.5            
         A[i, i] += n * 0.1
         b[i] = random.random() * 100
 
@@ -57,20 +52,20 @@ def print_A():
             print("A[", i, ",", j, "] = ", A[i, j])
 
 
-@ti.func
-def check_sol():
+# @ti.kernel
+def check_sol() -> ti.f64:
     res = 0.0
     r = 0.0
     for i in range(n):
         r = b[i]
         for j in range(n):
-            r -= A[i,j] * x[j]
+            r -= A[i, j] * x[j]
         res += r * r
     return res
 
-        
+
 @ti.func
-def jacobian_solve():
+def partial_jacobian():
     res = 0.0
     for i in ti.ndrange(n):
         x[i] = 1 / A[i, i] * (b[i] - A[i, i - 1] * x[i - 1] -
@@ -92,7 +87,7 @@ def full_jacobian():
         x[i] = r / A[i, i]
     for i in range(n):
         x[i] = x_new[i]
-    
+
     res = 0.0
 
     for i in range(n):
@@ -100,20 +95,17 @@ def full_jacobian():
         for j in range(n):
             r -= A[i, j] * x[j]
         res += r * r
-        
-#    print("x[",i,"] = ", x[i])
-#    res = check_sol()
-#    print("In the check...", res)
-    return res
+    return ti.sqrt(res)
 
 
 @ti.func
 def jacobian_iterate():
     res = 1.0
     iter = 0
-    while res > 1e-6:
+    while res > 1e-8:
         iter += 1
-        res = full_jacobian()
+        # res = full_jacobian()
+        res = partial_jacobian()
         if iter % 1 == 0:
             print("Iteration = ", iter, "Residual = ", res)
 
@@ -134,7 +126,7 @@ def conjgrad():
     for i in range(n):
         rsold += r[i] * r[i]
 
-    for _ in range(100000000):
+    for steps in range(n):
         # dot(A,p)
         for i in range(n):
             Ap[i] = 0.0
@@ -159,23 +151,35 @@ def conjgrad():
             rsnew += r[i] * r[i]
 
         if ti.sqrt(rsnew) < 1e-8:
+            print("The solution has converged...")
             break
 
         for i in range(n):
             p[i] = r[i] + (rsnew / rsold) * p[i]
         rsold = rsnew
-        print("iter = ", _, "residual = ", rsold)
+
+        if steps == n-1 and rsold > 1e-8:
+            print("The solution did NOT converge...")
+        return steps
 
 
 @ti.kernel
 def main():
-    # print_A()
     conjgrad()
     # jacobian_iterate()
-#    res = check_sol()
-    print("The final residual is ", check_sol())
-    for i in range(n):
-        print("After solved, x[",i,"] = ", x[i])
 
-init()
-main()
+
+if __name__ == "__main__":
+    init()
+    # init_rand()
+
+    start = time.time()
+    main()
+    end = time.time()
+
+    for i in range(n):
+        print("x[", i, "] = ", x[i])
+
+    res = check_sol()
+    print("The final residual is ", res)
+    print("Time collapsed is: ", end-start, " sec.")

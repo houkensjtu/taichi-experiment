@@ -1,11 +1,11 @@
 import numpy as np
-from scipy.sparse import csc_matrix
+import random
 from scipy.sparse.linalg import bicg
 from scipy.sparse.linalg import bicgstab
 from scipy.sparse.linalg import cg
 import time
 
-n = 10000
+n = 1024
 
 A = np.zeros((n, n))
 b = np.zeros(n)
@@ -21,39 +21,24 @@ def init():
                 A[i, j] = -1.0
             else:
                 A[i, j] = 0.0
-
-    # A[0, 0] = 1.0
-    # A[0, 1] = 0.0
-    
-    A[n-1, n-1] = 1.0    
-    A[n-1, n-2] = 0.0
-    
     for i in range(n):
         b[i] = 0.0
         x[i] = 0.0
-    b[0] = 100
-    b[n-1] = 0
+    b[0] = 100.0
+    b[n-1] = 0.0
 
-def is_pos_def(x):
-    return np.all(np.linalg.eigvals(x) > 0)    
 
-def disp():
-    global x
+def init_rand():
+    for i in range(n):
+        for j in range(n):
+            A[i, j] = random.random() - 0.5
+        A[i, i] += n * 0.1
+        b[i] = random.random() * 100
+
+
+def disp(x):
     for i in range(n):
         print("x[", i, "] = ", x[i])
-
-
-def jacobian_solve():
-    res = 0.0
-    x[0] = 1/A[0, 0] * (b[0] - A[0, 1]*x[1])
-    for i in range(1, n-1):
-        x[i] = 1/A[i, i] * (b[i] - A[i, i-1]*x[i-1] - A[i, i+1]*x[i+1])
-    x[n-1] = 1/A[n-1, n-1] * (b[n-1] - A[n-1, n-2]*x[n-2])
-    for i in range(1, n-1):
-        res = res + b[i] - A[i, i-1]*x[i-1] - A[i, i+1]*x[i+1] - A[i, i]*x[i]
-    res = res + (b[0] - A[0, 1]*x[1] - A[0, 0]*x[0])
-    res = res + (b[n-1] - A[n-1, n-2]*x[n-2] - A[n-1, n-1] * x[n-1])
-    return res
 
 
 def conjgrad(A, b, x):
@@ -83,61 +68,29 @@ def conjgrad(A, b, x):
             break
         p = r + (rsnew/rsold)*p
         rsold = rsnew
-        print("Iter = ", i, "Residual = ", rsold)
-    return x
-
-
-def numsolve():
-    return np.linalg.solve(A, b)
-
-
-def custom_cg():
-    return conjgrad(A, b, x)
-
-
-def bicgsolve():
-    x, exitCode = bicg(A, b, atol=1e-6)
+        # print("Iter = ", i, "Residual = ", rsold)
     return x
 
 
 def main():
-    init()
-    res = 1.0
-    iter = 0
-    print("Solving using Jacobian...")
-    while res > 1e-6:
-        iter += 1
-        res = jacobian_solve()
-        if iter % 1000 == 0:
-            print("Iteration = ", iter, "Residual = ", res)
-    # disp()
+    # init_rand()
+    # x = np.linalg.solve(A, b)
+    # conjgrad(A, b, x)
+    # x, exitCode = cg(A, b, tol=1e-8)
+    x, exitCode = bicg(A, b, tol=1e-8)
+    #x, exitCode = bicgstab(A, b, tol=1e-8)
+    return x
 
 
-def main2():
+if __name__ == "__main__":
     init()
-    print("Solving using numpy solve...")
-    x = numsolve()
+    # init_rand()
+
+    start = time.time()
+    x = main()
+    end = time.time()
+
     for i in range(n):
         print("x[", i, "] = ", x[i])
 
-
-def main3():
-    init()
-    print("Solving using bicg...")
-    x = bicgsolve()
-    for i in range(n):
-        print("x[", i, "] = ", x[i])
-
-
-
-def main4():
-    init()
-    x = custom_cg()
-    for i in range(n):
-        print("x[", i, "] = ", x[i])
-
-
-start = time.time()
-print(is_pos_def(A))
-main4()
-print(time.time()-start)
+    print("Time collapsed is: ", end-start, " sec.")
