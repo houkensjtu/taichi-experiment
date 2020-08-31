@@ -4,7 +4,7 @@ import time
 
 ti.init(default_fp=ti.f64)
 
-n = 1024
+n = 3000
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -236,6 +236,6 @@ if __name__ == "__main__":
     for i in range(n):
         print("x[", i, "] = ", x[i])
 
-    res = check_sol()
-    print("The final residual is ", res)
+    #res = check_sol()
+    #print("The final residual is ", res)
     print("Time collapsed is: ", end-start, " sec.")
