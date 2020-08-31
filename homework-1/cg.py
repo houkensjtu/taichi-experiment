@@ -162,10 +162,66 @@ def conjgrad():
             print("The solution did NOT converge...")
         return steps
 
+# Quick version of conjugate gradient
+# Only multiply non-zero elements in A
+# Other calculations are exactly same
+@ti.func
+def quick_conjgrad():
+    # dot(A,x)
+    for i in range(n):
+        Ax[i] = 0.0
+        for j in range(i-1,i+2):
+            Ax[i] += A[i, j] * x[j]
+    # r = b - dot(A,x)
+    # p = r
+    for i in range(n):
+        r[i] = b[i] - Ax[i]
+        p[i] = r[i]
+    rsold = 0.0
+    for i in range(n):
+        rsold += r[i] * r[i]
+
+    for steps in range(n):
+        # dot(A,p)
+        for i in range(n):
+            Ap[i] = 0.0
+            for j in range(i-1,i+2):
+                Ap[i] += A[i, j] * p[j]
+
+        # dot(p, Ap) => pAp
+        pAp = 0.0
+        for i in range(n):
+            pAp += p[i] * Ap[i]
+
+        alpha = rsold / pAp
+
+        # x = x + dot(alpha,p)
+        # r = r - dot(alpha,Ap)
+        for i in range(n):
+            x[i] += alpha * p[i]
+            r[i] -= alpha * Ap[i]
+
+        rsnew = 0.0
+        for i in range(n):
+            rsnew += r[i] * r[i]
+
+        if ti.sqrt(rsnew) < 1e-8:
+            print("The solution has converged...")
+            break
+
+        for i in range(n):
+            p[i] = r[i] + (rsnew / rsold) * p[i]
+        rsold = rsnew
+
+        if steps == n-1 and rsold > 1e-8:
+            print("The solution did NOT converge...")
+        return steps
+    
 
 @ti.kernel
 def main():
-    conjgrad()
+    # conjgrad()
+    quick_conjgrad()
     # jacobian_iterate()
 
 

@@ -7,8 +7,8 @@ ti.init()
 lx = 1.5
 ly = 0.3
 
-nx = 100
-ny = 30
+nx = 60
+ny = 20
 
 velo_rel = 0.01
 p_rel = 0.03
@@ -150,9 +150,14 @@ def fill_Av():
 def solve_axb(A, b):
     from scipy.sparse.linalg import qmr, bicg
     from scipy.sparse import csc_matrix
+    print("Now converting A and b to numpy...")
     A_np = A.to_numpy()
     b_np = b.to_numpy()
-    return np.linalg.solve(A_np, b_np)
+    print("Finished converting A and b to numpy...")
+    print("Now solving Ax=b...")
+    ans = np.linalg.solve(A_np, b_np)
+    print("Finished solving Ax=b...")
+    return ans
     #ans, exitCode = bicg(A_np, b_np, atol='legacy', tol=1e-3)
     # return ans
 
@@ -223,7 +228,10 @@ def iter_solve_v():
 
 
 def solve_moment_x():
+    print("Now filling Au...")
     fill_Au()
+    print("Finished filling Au...")
+    
     print("Solving x momentum...")
     # solve_axb returns a numpy array
     # needs to convert back to taichi
@@ -232,8 +240,9 @@ def solve_moment_x():
     #      npl.matrix_rank(Au.to_numpy()))
     xu.from_numpy(solve_axb(Au, bu))
     # iter_solve_u()
+    print("Converting xu to u...")
     sol_back_matrix(u, xu)
-
+    print("Finished converting xu to u...")
 
 def solve_moment_y():
     fill_Av()
@@ -406,9 +415,9 @@ if __name__ == "__main__":
 
     check_uconserv()
     for jter in range(1000):
-        print("Solving the outer loop", jter, "th iteration...")
-        for iter in range(10):
-            print("Solving the inner loop", iter, "th iteration...")
+        print("Solving the next time step, currently the ", jter, "th iteration...")
+        for iter in range(10000):
+            print("Looping through the inner loop, it's the ", iter, "th iteration out of 10...")
             solve_moment_x()
             solve_moment_y()
             correct_uconserv()

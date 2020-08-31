@@ -74,10 +74,10 @@ def conjgrad(A, b, x):
 
 def main():
     # init_rand()
-    # x = np.linalg.solve(A, b)
+    x = np.linalg.solve(A, b)
     # conjgrad(A, b, x)
     # x, exitCode = cg(A, b, tol=1e-8)
-    x, exitCode = bicg(A, b, tol=1e-8)
+    # x, exitCode = bicg(A, b, tol=1e-8)
     #x, exitCode = bicgstab(A, b, tol=1e-8)
     return x
 
