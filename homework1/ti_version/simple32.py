@@ -1,7 +1,7 @@
 import taichi as ti
 from display import display
 
-ti.init(default_fp = ti.f64, arch = ti.gpu)
+ti.init(default_fp = ti.f32, arch = ti.cpu)
 
 lx = 1.0
 ly = 0.1
@@ -13,53 +13,45 @@ rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 0.002
+dt = 0.001
 
 velo_rel = 0.01
 p_rel = 0.03
 
 # Add 1 cell padding to all directions.
-p = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
-pcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+p = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 2))
+pcor = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 2))
 
-u = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
-u0 = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
-ucor = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
-u_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+u = ti.field(dtype=ti.f32, shape=(nx + 3, ny + 2))
+u0 = ti.field(dtype=ti.f32, shape=(nx + 3, ny + 2))
+ucor = ti.field(dtype=ti.f32, shape=(nx + 3, ny + 2))
+u_post = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 2))
 
-v = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
-vcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
-v0 = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
-v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+v = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 3))
+vcor = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 3))
+v0 = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 3))
+v_post = ti.field(dtype=ti.f32, shape=(nx + 2, ny + 2))
 
 # ct stands for Cell Type.
 # ct = 0 -> Fluid
 # ct = 1 -> Solid
 ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 
-Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
-bu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xu_new = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xuold = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
+Au = ti.field(dtype=ti.f32, shape=((nx + 1) * ny, (nx + 1) * ny))
+bu = ti.field(dtype=ti.f32, shape=((nx + 1) * ny))
+xu = ti.field(dtype=ti.f32, shape=((nx + 1) * ny))
+xu_new = ti.field(dtype=ti.f32, shape=((nx + 1) * ny))
+xuold = ti.field(dtype=ti.f32, shape=((nx + 1) * ny))
 
-# for solving u momentum using CG
-Auxu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-ru = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-pu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-Aupu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-# def conjgrad(A, x, Ax, r, p, Ap):
+Av = ti.field(dtype=ti.f32, shape=(nx * (ny + 1), nx * (ny + 1)))
+bv = ti.field(dtype=ti.f32, shape=(nx * (ny + 1)))
+xv = ti.field(dtype=ti.f32, shape=(nx * (ny + 1)))
+xv_new = ti.field(dtype=ti.f32, shape=(nx * (ny + 1)))
+xvold = ti.field(dtype=ti.f32, shape=(nx * (ny + 1)))
 
-
-Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
-bv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xv_new = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xvold = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-
-Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
-bp = ti.field(dtype=ti.f64, shape=(nx * ny))
-xp = ti.field(dtype=ti.f64, shape=(nx * ny))
+Ap = ti.field(dtype=ti.f32, shape=(nx * ny, nx * ny))
+bp = ti.field(dtype=ti.f32, shape=(nx * ny))
+xp = ti.field(dtype=ti.f32, shape=(nx * ny))
 
 @ti.kernel
 def init():
@@ -136,7 +128,7 @@ def fill_Av():
             bv[k] = (p[i, j] - p[i, j - 1]) * dx + rho * dx * dy / dt * v0[i,j]
 
 @ti.kernel
-def full_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f64:
+def full_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f32:
     for i in range(x.shape[0]):
         r = b[i]
         for j in range(x.shape[0]):
@@ -157,7 +149,7 @@ def full_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.t
     return ti.sqrt(res)
 
 @ti.kernel
-def quick_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f64:
+def quick_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f32:
     for i in range(x.shape[0]):
         r = b[i]
         for j in range(i-ny-1,i+ny+2):
@@ -179,55 +171,6 @@ def quick_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.
 
 
 @ti.kernel
-def conjgrad(A:ti.template(), x:ti.template(), b:ti.template(), Ax:ti.template(), r:ti.template(), p:ti.template(), Ap:ti.template()):
-    # dot(A,x)
-    for i in range(x.shape[0]):
-        Ax[i] = 0.0
-        for j in range(i-ny-1,i+ny+2):
-            Ax[i] += A[i, j] * x[j]
-    # r = b - dot(A,x)
-    # p = r
-    for i in range(x.shape[0]):
-        r[i] = b[i] - Ax[i]
-        p[i] = r[i]
-    rsold = 0.0
-    for i in range(x.shape[0]):
-        rsold += r[i] * r[i]
-
-    for steps in range(x.shape[0]):
-        # dot(A,p)
-        for i in range(x.shape[0]):
-            Ap[i] = 0.0
-            for j in range(i-ny-1,i+ny+2):
-                Ap[i] += A[i, j] * p[j]
-
-        # dot(p, Ap) => pAp
-        pAp = 0.0
-        for i in range(x.shape[0]):
-            pAp += p[i] * Ap[i]
-
-        alpha = rsold / pAp
-
-        # x = x + dot(alpha,p)
-        # r = r - dot(alpha,Ap)
-        for i in range(x.shape[0]):
-            x[i] += alpha * p[i]
-            r[i] -= alpha * Ap[i]
-
-        rsnew = 0.0
-        for i in range(x.shape[0]):
-            rsnew += r[i] * r[i]
-
-        if ti.sqrt(rsnew) < 1e-6:
-            print("The solution has converged...")
-            break
-
-        for i in range(x.shape[0]):
-            p[i] = r[i] + (rsnew / rsold) * p[i]
-        rsold = rsnew
-        print(steps, rsold)
-
-@ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
         u[i + 1, j + 1] = xu[i * ny + j]
@@ -241,36 +184,37 @@ def xv_back():
 @ti.kernel
 def proc_u():
     for i, j in u:
-        u[i,j] = u[i,j] / 2.0
+        ucor[i,j] = u[i,j] / 2.0
 
         
 if __name__ == "__main__":
     init()
     fill_Au()
     fill_Av()
+    
+    gui = ti.GUI('SIMPLE Taichi', (nx+3, ny+2))
 
     residual_x = 10.0
-    # def conjgrad(A, x, Ax, r, p, Ap):    
-    conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
-#    while residual_x > 1e-8:
-#        print("Residual x = ", residual_x)
-#        residual_x = quick_jacobian(Au,bu,xu,xu_new)
-        
-    residual_y = 10.0
-    while residual_y > 1e-8:
-        print("Residual y = ", residual_y)
-        residual_y = quick_jacobian(Av,bv,xv,xv_new)
-
-    xu_back()
-    xv_back()
+    while residual_x > 1e-8:
+        print("Residual x = ", residual_x)
+        residual_x = quick_jacobian(Au,bu,xu,xu_new)
+        xu_back()
+        proc_u()
+        gui.set_image(ucor)
+        gui.show()
     
-    for j in range(ny+2):
-        print("i = ", nx+1 , ", j = ", j , ", u = ", u[nx+1,j])
-    for j in range(ny+2):
-        print("i = ", 1 , ", j = ", j , ", u = ", u[1,j])
+#    for j in range(ny+2):
+#        print("i = ", nx+1 , ", j = ", j , ", u = ", u[nx+1,j])
+#    for j in range(ny+2):
+#        print("i = ", 1 , ", j = ", j , ", u = ", u[1,j])
 
 
 #    for j in range(ny+2):
 #        print("i = 201, j = ",j, "v = ", v[nx,j])
 #    for j in range(ny+2):
 #        print("i = 1, j = ",j, "v = ", v[1,j])
+
+    proc_u()
+    gui = ti.GUI('SIMPLE Taichi', (nx+3, ny+2))
+    gui.set_image(ucor)
+    gui.show()
