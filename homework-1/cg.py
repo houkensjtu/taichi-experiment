@@ -4,7 +4,7 @@ import time
 
 ti.init(default_fp=ti.f64)
 
-n = 1000
+n = 50
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -84,7 +84,7 @@ def full_jacobian():
             if i != j:
                 r -= A[i, j] * x[j]
         x_new[i] = r / A[i, i]
-        x[i] = r / A[i, i]
+
     for i in range(n):
         x[i] = x_new[i]
 
