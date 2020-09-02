@@ -4,7 +4,7 @@ import time
 
 ti.init(default_fp=ti.f64)
 
-n = 3000
+n = 1000
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -104,8 +104,8 @@ def jacobian_iterate():
     iter = 0
     while res > 1e-8:
         iter += 1
-        # res = full_jacobian()
-        res = partial_jacobian()
+        res = full_jacobian()
+        # res = partial_jacobian()
         if iter % 1 == 0:
             print("Iteration = ", iter, "Residual = ", res)
 
@@ -165,12 +165,14 @@ def conjgrad():
 # Quick version of conjugate gradient
 # Only multiply non-zero elements in A
 # Other calculations are exactly same
+
+
 @ti.func
 def quick_conjgrad():
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-1,i+2):
+        for j in range(i-1, i+2):
             Ax[i] += A[i, j] * x[j]
     # r = b - dot(A,x)
     # p = r
@@ -185,7 +187,7 @@ def quick_conjgrad():
         # dot(A,p)
         for i in range(n):
             Ap[i] = 0.0
-            for j in range(i-1,i+2):
+            for j in range(i-1, i+2):
                 Ap[i] += A[i, j] * p[j]
 
         # dot(p, Ap) => pAp
@@ -216,13 +218,13 @@ def quick_conjgrad():
         if steps == n-1 and rsold > 1e-8:
             print("The solution did NOT converge...")
         return steps
-    
+
 
 @ti.kernel
 def main():
     # conjgrad()
-    quick_conjgrad()
-    # jacobian_iterate()
+    # quick_conjgrad()
+    jacobian_iterate()
 
 
 if __name__ == "__main__":
