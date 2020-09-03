@@ -4,7 +4,7 @@ import time
 
 ti.init(default_fp=ti.f64)
 
-n = 50
+n = 16384
 
 A = ti.field(dtype=ti.f64, shape=(n, n))
 x = ti.field(dtype=ti.f64, shape=n)
@@ -158,6 +158,8 @@ def conjgrad():
             p[i] = r[i] + (rsnew / rsold) * p[i]
         rsold = rsnew
 
+        print("Iteration ", steps, ", residual = ", rsold)        
+
         if steps == n-1 and rsold > 1e-8:
             print("The solution did NOT converge...")
         return steps
@@ -215,6 +217,8 @@ def quick_conjgrad():
             p[i] = r[i] + (rsnew / rsold) * p[i]
         rsold = rsnew
 
+        print("Iteration ", steps, ", residual = ", rsold)
+
         if steps == n-1 and rsold > 1e-8:
             print("The solution did NOT converge...")
         return steps
@@ -223,8 +227,8 @@ def quick_conjgrad():
 @ti.kernel
 def main():
     # conjgrad()
-    # quick_conjgrad()
-    jacobian_iterate()
+    quick_conjgrad()
+    # jacobian_iterate()
 
 
 if __name__ == "__main__":

@@ -1,19 +1,36 @@
+# Purpose:
+# Compare the performance of struct for and range for
+# on a sparse (pointer) matrix A.
+
+# Notes:
+# 1. n has better to be power of 2.
+# 2. Nested pointer is required to obtain ideal performance.
+# 3. x,b,r don't have to be sparse at all.
+
+# Results:
+# 1. When n = 128, on 2 level nested pointer, full = 17sec, sparse = 14sec.
+# 2. The results don't change much when added one more layer, or adjust layer size.
+# 3. Performance diff will be bigger when matrix size increase.
+
 import taichi as ti
 import random
 import time
 
 ti.init(default_fp=ti.f64)
 
-n = 50
+# Better to be power of 2.
+n = 128
 
+# Two level nested structure is required to have good performance.
 A = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij, (n, n)).place(A)
+ti.root.pointer(ti.ij, (n//8, n//8)).pointer(ti.ij, (8,8)).place(A)
 
+# Those vectors don't have to be sparse.
 x = ti.field(dtype=ti.f64)
 b = ti.field(dtype=ti.f64)
 r = ti.field(dtype=ti.f64)
 x_new = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.i, n).place(x, b, x_new,r)
+ti.root.dense(ti.i, n).place(x, b, x_new,r)
 
 
 @ti.kernel
@@ -81,18 +98,7 @@ def disp_x():
     
 
 if __name__ == "__main__":
-    init()
 
-    # Jacobian iteration
-    res = 1.0
-    iter_full = 0
-    start_full_jacob = time.time()
-    while res > 1e-8:
-        iter_full += 1
-        res = full_jacobian()
-        print("Iteration = ", iter_full, "Residual = ", res)
-    end_full_jacob = time.time()
-    
     init()
     # Sparse Jacobian iteration
     res = 1.0
@@ -103,6 +109,17 @@ if __name__ == "__main__":
         res = full_jacobian_sparse()
         print("Iteration = ", iter_sparse, "Residual = ", res)
     end_sparse_jacob = time.time()
+    
+    init()
+    # Jacobian iteration
+    res = 1.0
+    iter_full = 0
+    start_full_jacob = time.time()
+    while res > 1e-8:
+        iter_full += 1
+        res = full_jacobian()
+        print("Iteration = ", iter_full, "Residual = ", res)
+    end_full_jacob = time.time()
     
     disp_x()
 
