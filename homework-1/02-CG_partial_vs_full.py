@@ -1,12 +1,28 @@
+# Purpose:
+# Understand the performance difference of CG on dense and sparse matrix.
+
+# Notes:
+# Only A is implemented as sparse, x,b,r are all dense.
+# Struct-for is not implemented in CG because for loop cannot be nested
+
+# Results:
+# 1. Restrict the range of CG dot product greatly improve the performance.
+# 2. Dense vs. Sparse has very similar performance.
+# 3. The best performance with restricted range CG is 0.16 sec for 1023 A.
+# As a ref, numpy solve uses 0.044 sec, ti full CG uses 2.21 sec, ti full
+# Jacobian will use >>60 sec. So the restricted version CG is of considerable
+# good performance.
+
 import taichi as ti
 import random
 import time
 
 ti.init(default_fp=ti.f64)
 
-n = 16384
-
-A = ti.field(dtype=ti.f64, shape=(n, n))
+n = 256
+A = ti.field(dtype=ti.f64)
+ti.root.pointer(ti.ij, (n//8, n//8)).pointer(ti.ij, (8, 8)).place(A)
+# ti.root.dense(ti.ij, (n, n)).place(A)
 x = ti.field(dtype=ti.f64, shape=n)
 b = ti.field(dtype=ti.f64, shape=n)
 x_new = ti.field(dtype=ti.f64, shape=n)
@@ -20,13 +36,11 @@ Ap = ti.field(dtype=ti.f64, shape=n)
 
 @ti.kernel
 def init():
-    for i, j in A:
+    for i, j in ti.ndrange(n, n):
         if i == j:
             A[i, j] = 2.0
         elif ti.abs(i - j) == 1:
             A[i, j] = -1.0
-        else:
-            A[i, j] = 0.0
     for i in x:
         b[i] = 0.0
         x[i] = 0.0
@@ -111,7 +125,7 @@ def jacobian_iterate():
 
 
 @ti.func
-def conjgrad():
+def range_conjgrad():
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
@@ -126,70 +140,11 @@ def conjgrad():
     for i in range(n):
         rsold += r[i] * r[i]
 
-    for steps in range(n):
+    for steps in range(10000*n):
         # dot(A,p)
         for i in range(n):
             Ap[i] = 0.0
             for j in range(n):
-                Ap[i] += A[i, j] * p[j]
-
-        # dot(p, Ap) => pAp
-        pAp = 0.0
-        for i in range(n):
-            pAp += p[i] * Ap[i]
-
-        alpha = rsold / pAp
-
-        # x = x + dot(alpha,p)
-        # r = r - dot(alpha,Ap)
-        for i in range(n):
-            x[i] += alpha * p[i]
-            r[i] -= alpha * Ap[i]
-
-        rsnew = 0.0
-        for i in range(n):
-            rsnew += r[i] * r[i]
-
-        if ti.sqrt(rsnew) < 1e-8:
-            print("The solution has converged...")
-            break
-
-        for i in range(n):
-            p[i] = r[i] + (rsnew / rsold) * p[i]
-        rsold = rsnew
-
-        print("Iteration ", steps, ", residual = ", rsold)        
-
-        if steps == n-1 and rsold > 1e-8:
-            print("The solution did NOT converge...")
-        return steps
-
-# Quick version of conjugate gradient
-# Only multiply non-zero elements in A
-# Other calculations are exactly same
-
-
-@ti.func
-def quick_conjgrad():
-    # dot(A,x)
-    for i in range(n):
-        Ax[i] = 0.0
-        for j in range(i-1, i+2):
-            Ax[i] += A[i, j] * x[j]
-    # r = b - dot(A,x)
-    # p = r
-    for i in range(n):
-        r[i] = b[i] - Ax[i]
-        p[i] = r[i]
-    rsold = 0.0
-    for i in range(n):
-        rsold += r[i] * r[i]
-
-    for steps in range(n):
-        # dot(A,p)
-        for i in range(n):
-            Ap[i] = 0.0
-            for j in range(i-1, i+2):
                 Ap[i] += A[i, j] * p[j]
 
         # dot(p, Ap) => pAp
@@ -223,11 +178,66 @@ def quick_conjgrad():
             print("The solution did NOT converge...")
         return steps
 
+# Quick version of conjugate gradient
+# Only multiply non-zero elements in A
+# Other calculations are exactly same
+
+
+@ti.func
+def struct_conjgrad():
+    # dot(A,x)
+    for i in range(n):
+        Ax[i] = 0.0
+        for j in range(i-1, i+2):
+            Ax[i] += A[i, j] * x[j]
+    # r = b - dot(A,x)
+    # p = r
+    for i in range(n):
+        r[i] = b[i] - Ax[i]
+        p[i] = r[i]
+    rsold = 0.0
+    for i in range(n):
+        rsold += r[i] * r[i]
+
+    for steps in range(100*n):
+        # dot(A,p)
+        for i in range(n):
+            Ap[i] = 0.0
+            for j in range(i-1, i+2):
+                Ap[i] += A[i, j] * p[j]
+
+        # dot(p, Ap) => pAp
+        pAp = 0.0
+        for i in range(n):
+            pAp += p[i] * Ap[i]
+
+        alpha = rsold / pAp
+
+        # x = x + dot(alpha,p)
+        # r = r - dot(alpha,Ap)
+        for i in range(n):
+            x[i] += alpha * p[i]
+            r[i] -= alpha * Ap[i]
+
+        rsnew = 0.0
+        for i in range(n):
+            rsnew += r[i] * r[i]
+
+        if ti.sqrt(rsnew) < 1e-8:
+            print("The solution has converged...")
+            break
+
+        for i in range(n):
+            p[i] = r[i] + (rsnew / rsold) * p[i]
+        rsold = rsnew
+
+        print("Iteration ", steps, ", residual = ", rsold)
+
 
 @ti.kernel
 def main():
     # conjgrad()
-    quick_conjgrad()
+    struct_conjgrad()
     # jacobian_iterate()
 
 
