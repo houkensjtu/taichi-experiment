@@ -1,20 +1,42 @@
 import taichi as ti
-from display import display
 
-ti.init(default_fp = ti.f64, arch = ti.gpu)
+ti.init(default_fp=ti.f64, arch=ti.cpu)
+
+# Notes:
+# >>> for i in ti.ndrange(5):
+# ...     print(i)
+# ...
+# (0,)
+# (1,)
+# (2,)
+# (3,)
+# (4,)
+
+
+# Problems:
+
+# fill_Au
+# 1. Inlet and outlet setting.
+# 2. Upper and lower wall boundary setting.
+# 3. Investigate the property of Au, is it symmetry? Is it positive definite?
+# 4. Depends on dt, which is quicker? CG or Jacobian?
+# 5. When boundary is implemented as simple 1 = u, what's the results on A's property?
+#    Does it affect p correction equation?
+
 
 lx = 1.0
 ly = 0.1
 
-nx = 300
+nx = 200
 ny = 60
 
 rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 0.002
+dt = 20000
 
+# Relaxation factors
 velo_rel = 0.01
 p_rel = 0.03
 
@@ -28,8 +50,8 @@ ucor = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
 u_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 
 v = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
-vcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
 v0 = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
+vcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
 v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 
 # ct stands for Cell Type.
@@ -61,6 +83,7 @@ Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
 bp = ti.field(dtype=ti.f64, shape=(nx * ny))
 xp = ti.field(dtype=ti.f64, shape=(nx * ny))
 
+
 @ti.kernel
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
@@ -77,31 +100,43 @@ def init():
     for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
         ct[i, j] = -1  # "-1" stands for fluid
 
-@ti.kernel            
+
+@ti.kernel
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
 
         # Inlet and Outlet
+        # ct[i-1,j] is the left cell of u[i,j]
+        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
         if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
-            # print("In the inlet or outlet setting..", "i = ", i, ", j = ", j, ", k = ", k)
             Au[k, k] = 1.0
             bu[k] = u[i, j]
+
         # Outlet
+        # ct[i,j] is the right cell of u[i,j]
         elif (ct[i, j] == 1):
             Au[k, k] = 1.0
             Au[k, k - ny] = -1.0
-            #bu[k] = u[i - 1, j]
+            # bu[k] = u[i - 1, j]
+            # bu[k] = u[i, j]
             bu[k] = 0.0
 
         # Normal internal cells
         else:
-            Au[k, k - 1] = -mu * dx / dy - ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
-            Au[k, k + 1] = -mu * dx / dy - ti.max(0, rho * 0.5 * (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
-            Au[k, k - ny] = -mu * dy / dx - ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
-            Au[k, k + ny] = -mu * dy / dx - ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
-            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - Au[k, k + ny] + rho * dx * dy / dt  # ap
-            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * dy / dt * u0[i, j]  # <= Unsteady term
+            Au[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+            Au[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 *
+                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
 
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
@@ -112,6 +147,7 @@ def fill_Au():
         elif (ct[i, j] + ct[i, j + 1]) == 0:
             Au[k, k] = Au[k, k] - Au[k, k + 1] + 2 * mu
             Au[k, k + 1] = 0
+
 
 @ti.kernel
 def fill_Av():
@@ -128,15 +164,23 @@ def fill_Av():
             However, since in solve_v, when convert to numpy, A[1,-30] become
             0.0 automatically.
             """
-            Av[k, k - 1] = -mu * dx / dy - ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
-            Av[k, k + 1] = -mu * dx / dy - ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
-            Av[k, k - ny - 1] = -mu * dy / dx - ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
-            Av[k, k + ny + 1] = -mu * dy / dx - ti.max(0, -rho * 0.5 * (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
-            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] - Av[k, k + ny + 1] + rho * dx * dy / dt  # ap
-            bv[k] = (p[i, j] - p[i, j - 1]) * dx + rho * dx * dy / dt * v0[i,j]
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k - ny - 1] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
+            Av[k, k + ny + 1] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 *
+                       (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] - \
+                Av[k, k + ny + 1] + rho * dx * dy / dt  # ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
+
 
 @ti.kernel
-def full_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f64:
+def full_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: ti.template()) -> ti.f64:
     for i in range(x.shape[0]):
         r = b[i]
         for j in range(x.shape[0]):
@@ -156,13 +200,14 @@ def full_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.t
         res += r * r
     return ti.sqrt(res)
 
+
 @ti.kernel
-def quick_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.template())->ti.f64:
+def quick_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: ti.template()) -> ti.f64:
     for i in range(x.shape[0]):
         r = b[i]
-        for j in range(i-ny-1,i+ny+2):
+        for j in range(i-ny-1, i+ny+2):
             if i != j:
-               r -= A[i, j] * x[j]
+                r -= A[i, j] * x[j]
         x_new[i] = r / A[i, i]
         x[i] = r / A[i, i]
     for i in range(x.shape[0]):
@@ -172,18 +217,18 @@ def quick_jacobian(A:ti.template(), b: ti.template(), x:ti.template(), x_new:ti.
 
     for i in range(x.shape[0]):
         r = b[i] * 1.0
-        for j in range(i-ny-1,i+ny+2):
+        for j in range(i-ny-1, i+ny+2):
             r -= A[i, j] * x[j]
         res += r * r
     return ti.sqrt(res)
 
 
 @ti.kernel
-def conjgrad(A:ti.template(), x:ti.template(), b:ti.template(), Ax:ti.template(), r:ti.template(), p:ti.template(), Ap:ti.template()):
+def conjgrad(A: ti.template(), x: ti.template(), b: ti.template(), Ax: ti.template(), r: ti.template(), p: ti.template(), Ap: ti.template()):
     # dot(A,x)
     for i in range(x.shape[0]):
         Ax[i] = 0.0
-        for j in range(i-ny-1,i+ny+2):
+        for j in range(i-ny-1, i+ny+2):
             Ax[i] += A[i, j] * x[j]
     # r = b - dot(A,x)
     # p = r
@@ -198,7 +243,7 @@ def conjgrad(A:ti.template(), x:ti.template(), b:ti.template(), Ax:ti.template()
         # dot(A,p)
         for i in range(x.shape[0]):
             Ap[i] = 0.0
-            for j in range(i-ny-1,i+ny+2):
+            for j in range(i-ny-1, i+ny+2):
                 Ap[i] += A[i, j] * p[j]
 
         # dot(p, Ap) => pAp
@@ -227,47 +272,48 @@ def conjgrad(A:ti.template(), x:ti.template(), b:ti.template(), Ax:ti.template()
         rsold = rsnew
         print(steps, rsold)
 
+
 @ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
         u[i + 1, j + 1] = xu[i * ny + j]
 
-        
+
 @ti.kernel
 def xv_back():
     for i, j in ti.ndrange(nx, ny + 1):
         v[i + 1, j + 1] = xv[i * ny + j]
 
+
 @ti.kernel
 def proc_u():
     for i, j in u:
-        u[i,j] = u[i,j] / 2.0
+        u[i, j] = u[i, j] / 2.0
 
-        
+
 if __name__ == "__main__":
     init()
     fill_Au()
     fill_Av()
 
     residual_x = 10.0
-    # def conjgrad(A, x, Ax, r, p, Ap):    
-    conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
-#    while residual_x > 1e-8:
-#        print("Residual x = ", residual_x)
-#        residual_x = quick_jacobian(Au,bu,xu,xu_new)
-        
+    # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
+    while residual_x > 1e-8:
+        print("Residual x = ", residual_x)
+        residual_x = quick_jacobian(Au, bu, xu, xu_new)
+
     residual_y = 10.0
     while residual_y > 1e-8:
         print("Residual y = ", residual_y)
-        residual_y = quick_jacobian(Av,bv,xv,xv_new)
+        residual_y = quick_jacobian(Av, bv, xv, xv_new)
 
     xu_back()
     xv_back()
-    
+
     for j in range(ny+2):
-        print("i = ", nx+1 , ", j = ", j , ", u = ", u[nx+1,j])
+        print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
     for j in range(ny+2):
-        print("i = ", 1 , ", j = ", j , ", u = ", u[1,j])
+        print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
 
 
 #    for j in range(ny+2):
