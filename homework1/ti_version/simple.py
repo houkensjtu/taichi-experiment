@@ -17,9 +17,15 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 
 # fill_Au
 # 1. Inlet and outlet setting.
+
 # 2. Upper and lower wall boundary setting.
+# => For upper bound, an = 0 and ap += 2*mu*dx/dy
+
 # 3. Investigate the property of Au, is it symmetry? Is it positive definite?
+#    => Au is not symmetry, but it is full rank and all eig values are positive.
+
 # 4. Depends on dt, which is quicker? CG or Jacobian?
+
 # 5. When boundary is implemented as simple 1 = u, what's the results on A's property?
 #    Does it affect p correction equation?
 
@@ -27,14 +33,14 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 lx = 1.0
 ly = 0.1
 
-nx = 200
+nx = 100
 ny = 60
 
 rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 20000
+dt = 1000000
 
 # Relaxation factors
 velo_rel = 0.01
@@ -87,7 +93,7 @@ xp = ti.field(dtype=ti.f64, shape=(nx * ny))
 @ti.kernel
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
-        p[i, j] = 100 - 12 * i / nx
+        p[i, j] = 100 - 11.88 * i / nx
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
         u0[i, j] = u[i, j]
@@ -142,11 +148,19 @@ def fill_Au():
         k = (i - 1) * ny + (j - 1)
         # Upper and lower boundary
         if (ct[i, j] + ct[i, j - 1]) == 0:
-            Au[k, k] = Au[k, k] - Au[k, k - 1] + 2 * mu
+            Au[k, k] = Au[k, k] + Au[k, k - 1] + 2 * mu * dx/dy 
             Au[k, k - 1] = 0
+            bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4
         elif (ct[i, j] + ct[i, j + 1]) == 0:
-            Au[k, k] = Au[k, k] - Au[k, k + 1] + 2 * mu
+            Au[k, k] = Au[k, k] + Au[k, k + 1] + 2 * mu * dx/dy
             Au[k, k + 1] = 0
+            bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4            
+
+    for i in range((nx+1)*ny):
+        for j in range((nx+1)*ny):
+#            print("i = ", i, "j = ", j, "Au[i,j] = ", Au[i,j])
+            pass
+
 
 
 @ti.kernel
@@ -293,14 +307,17 @@ def proc_u():
 
 if __name__ == "__main__":
     init()
-    fill_Au()
-    fill_Av()
-
-    residual_x = 10.0
-    # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
-    while residual_x > 1e-8:
-        print("Residual x = ", residual_x)
-        residual_x = quick_jacobian(Au, bu, xu, xu_new)
+#    fill_Au()
+#    fill_Av()
+    for steps in range(50):
+        residual_x = 10.0
+        # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
+        fill_Au()
+        while residual_x > 1e-6:
+            print("Residual x = ", residual_x)
+            residual_x = quick_jacobian(Au, bu, xu, xu_new)
+            # xu = xu_new
+        xu_back()
 
     residual_y = 10.0
     while residual_y > 1e-8:
