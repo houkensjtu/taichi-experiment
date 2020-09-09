@@ -1,6 +1,6 @@
 import taichi as ti
 
-ti.init(default_fp=ti.f64, arch=ti.cpu)
+ti.init(default_fp=ti.f64, arch=ti.cpu, debug=True)
 
 # Notes:
 # >>> for i in ti.ndrange(5):
@@ -17,24 +17,29 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 
 # fill_Au
 # 1. Inlet and outlet setting.
+# => For inlet, Au[k,k] = 1 and bu[k] = inlet velocity. Will not affect p correction.
+# => For outlet, Au[k,k] = Au[k-ny,k-ny], and Au[k,k-ny] = -Au[k,k].
 
 # 2. Upper and lower wall boundary setting.
 # => For upper bound, an = 0 and ap += 2*mu*dx/dy
 
 # 3. Investigate the property of Au, is it symmetry? Is it positive definite?
-#    => Au is not symmetry, but it is full rank and all eig values are positive.
+# => Au is not symmetry, but it is full rank and all eig values are positive.
 
 # 4. Depends on dt, which is quicker? CG or Jacobian?
 
-# 5. When boundary is implemented as simple 1 = u, what's the results on A's property?
+# 5. When inlet boundary is implemented as simple Au[i,i] = 1, what's the results on A's property?
 #    Does it affect p correction equation?
 
+# fill_Av
+# 1. Accessing out of bound elements is causing unexpected write-in in Av.
+# => Make sure all access (k-1, k-ny-1, k+1, k+ny+1) are within boundary.
 
 lx = 1.0
 ly = 0.1
 
 nx = 100
-ny = 60
+ny = 100
 
 rho = 1
 mu = 0.01
@@ -93,7 +98,7 @@ xp = ti.field(dtype=ti.f64, shape=(nx * ny))
 @ti.kernel
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
-        p[i, j] = 100 - 11.88 * i / nx
+        p[i, j] = 100 - 12.0 * i / nx
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
         u0[i, j] = u[i, j]
@@ -112,54 +117,52 @@ def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
 
-        # Inlet and Outlet
+        # Normal internal cells
+        Au[k, k - 1] = -mu * dx / dy - \
+            ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+        Au[k, k + 1] = -mu * dx / dy - \
+            ti.max(0, rho * 0.5 *
+                  (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+        Au[k, k - ny] = -mu * dy / dx - \
+            ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+        Au[k, k + ny] = -mu * dy / dx - \
+            ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+        Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
+            Au[k, k + ny] + rho * dx * dy / dt  # ap
+        bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+            dy / dt * u0[i, j]  # <= Unsteady term
+        
+        # Inlet
         # ct[i-1,j] is the left cell of u[i,j]
-        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
+        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block        
         if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
-            Au[k, k] = 1.0
-            bu[k] = u[i, j]
+           Au[k, k] = 1.0
+           Au[k,k+1] = 0.0
+           Au[k,k-1] = 0.0
+           Au[k,k-ny] = 0.0
+           Au[k,k+ny] = 0.0
+           bu[k] = u[i, j]
 
         # Outlet
         # ct[i,j] is the right cell of u[i,j]
-        elif (ct[i, j] == 1):
-            Au[k, k] = 1.0
-            Au[k, k - ny] = -1.0
-            # bu[k] = u[i - 1, j]
-            # bu[k] = u[i, j]
-            bu[k] = 0.0
+        if (ct[i, j] == 1):
+           Au[k, k] = Au[k-ny,k-ny]
+           Au[k, k - ny] = -Au[k,k]
+           Au[k,k+1] = 0.0
+           Au[k,k-1] = 0.0
+           Au[k,k+ny] = 0.0
+           bu[k] = 0.0        
 
-        # Normal internal cells
-        else:
-            Au[k, k - 1] = -mu * dx / dy - \
-                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
-            Au[k, k + 1] = -mu * dx / dy - \
-                ti.max(0, rho * 0.5 *
-                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
-            Au[k, k - ny] = -mu * dy / dx - \
-                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
-            Au[k, k + ny] = -mu * dy / dx - \
-                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
-            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
-                Au[k, k + ny] + rho * dx * dy / dt  # ap
-            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
-                dy / dt * u0[i, j]  # <= Unsteady term
-
-    for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
-        k = (i - 1) * ny + (j - 1)
         # Upper and lower boundary
-        if (ct[i, j] + ct[i, j - 1]) == 0:
+        if (ct[i, j] + ct[i, j - 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
+            # Be careful it should be + Au[k,k-1] because it is minus.
+            # Also, notice that 2*mu should be followed by dx/dy.
             Au[k, k] = Au[k, k] + Au[k, k - 1] + 2 * mu * dx/dy 
             Au[k, k - 1] = 0
-            bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4
-        elif (ct[i, j] + ct[i, j + 1]) == 0:
+            # For second order wall visc: bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4
+        elif (ct[i, j] + ct[i, j + 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
             Au[k, k] = Au[k, k] + Au[k, k + 1] + 2 * mu * dx/dy
             Au[k, k + 1] = 0
-            bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4            
-
-    for i in range((nx+1)*ny):
-        for j in range((nx+1)*ny):
-#            print("i = ", i, "j = ", j, "Au[i,j] = ", Au[i,j])
-            pass
 
 
 
@@ -191,6 +194,9 @@ def fill_Av():
                 Av[k, k + ny + 1] + rho * dx * dy / dt  # ap
             bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
                 rho * dx * dy / dt * v0[i, j]
+#    for i in range(nx*(ny+1)):
+#        for j in range(nx*(ny+1)):
+#            print("Av[", i, ",", j, "] = ", Av[i,j])
 
 
 @ti.kernel
@@ -299,21 +305,15 @@ def xv_back():
         v[i + 1, j + 1] = xv[i * ny + j]
 
 
-@ti.kernel
-def proc_u():
-    for i, j in u:
-        u[i, j] = u[i, j] / 2.0
-
-
 if __name__ == "__main__":
     init()
 #    fill_Au()
-#    fill_Av()
-    for steps in range(50):
+    fill_Av()
+    for steps in range(2):
         residual_x = 10.0
         # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
         fill_Au()
-        while residual_x > 1e-6:
+        while residual_x > 1e-5:
             print("Residual x = ", residual_x)
             residual_x = quick_jacobian(Au, bu, xu, xu_new)
             # xu = xu_new
@@ -331,9 +331,3 @@ if __name__ == "__main__":
         print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
     for j in range(ny+2):
         print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
-
-
-#    for j in range(ny+2):
-#        print("i = 201, j = ",j, "v = ", v[nx,j])
-#    for j in range(ny+2):
-#        print("i = 1, j = ",j, "v = ", v[1,j])
