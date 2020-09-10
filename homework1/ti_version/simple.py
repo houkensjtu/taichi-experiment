@@ -1,6 +1,6 @@
 import taichi as ti
 
-ti.init(default_fp=ti.f64, arch=ti.cpu, debug=True)
+ti.init(default_fp=ti.f64, arch=ti.cpu)
 
 # Notes:
 # >>> for i in ti.ndrange(5):
@@ -35,11 +35,15 @@ ti.init(default_fp=ti.f64, arch=ti.cpu, debug=True)
 # 1. Accessing out of bound elements is causing unexpected write-in in Av.
 # => Make sure all access (k-1, k-ny-1, k+1, k+ny+1) are within boundary.
 
+# Problems almost solved; Confirmed that the solution is correct for 2D plane hagen-posiule flow.
+# Next step will be implementing the BiCGSTAB solver to replace Jacobian.
+# One remaining issue: In quick Jacobian, solver is accessing elements out of bounds.
+
 lx = 1.0
 ly = 0.1
 
-nx = 100
-ny = 100
+nx = 64
+ny = 64
 
 rho = 1
 mu = 0.01
@@ -116,44 +120,37 @@ def init():
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-
-        # Normal internal cells
-        Au[k, k - 1] = -mu * dx / dy - \
-            ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
-        Au[k, k + 1] = -mu * dx / dy - \
-            ti.max(0, rho * 0.5 *
-                  (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
-        Au[k, k - ny] = -mu * dy / dx - \
-            ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
-        Au[k, k + ny] = -mu * dy / dx - \
-            ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
-        Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
-            Au[k, k + ny] + rho * dx * dy / dt  # ap
-        bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
-            dy / dt * u0[i, j]  # <= Unsteady term
         
         # Inlet
         # ct[i-1,j] is the left cell of u[i,j]
         # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block        
         if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
-           Au[k, k] = 1.0
-           Au[k,k+1] = 0.0
-           Au[k,k-1] = 0.0
-           Au[k,k-ny] = 0.0
-           Au[k,k+ny] = 0.0
-           bu[k] = u[i, j]
-
+            Au[k, k] = 1.0
+            bu[k] = u[i, j]
         # Outlet
         # ct[i,j] is the right cell of u[i,j]
-        if (ct[i, j] == 1):
-           Au[k, k] = Au[k-ny,k-ny]
-           Au[k, k - ny] = -Au[k,k]
-           Au[k,k+1] = 0.0
-           Au[k,k-1] = 0.0
-           Au[k,k+ny] = 0.0
-           bu[k] = 0.0        
-
+        elif (ct[i, j] == 1):
+            Au[k, k] = 1.0 # Au[k-ny,k-ny]
+            Au[k, k - ny] = -1.0 # -Au[k,k]
+            bu[k] = 0.0
+        else:   
+        # Normal internal cells
+            Au[k, k - 1] = -mu * dx / dy - \
+            ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+            Au[k, k + 1] = -mu * dx / dy - \
+            ti.max(0, rho * 0.5 *
+                  (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+            Au[k, k - ny] = -mu * dy / dx - \
+            ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+            ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
+            Au[k, k + ny] + rho * dx * dy / dt  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+            dy / dt * u0[i, j]  # <= Unsteady term
+        
         # Upper and lower boundary
+        # Excluded the inlet and outlet
         if (ct[i, j] + ct[i, j - 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
             # Be careful it should be + Au[k,k-1] because it is minus.
             # Also, notice that 2*mu should be followed by dx/dy.
@@ -174,6 +171,31 @@ def fill_Av():
         if (ct[i, j] + ct[i, j - 1]) == 0 or (ct[i, j] + ct[i, j - 1]) == 2:
             Av[k, k] = 1.0
             bv[k] = v[i, j]
+        # Inlet: do not access west cell A[k,k-ny-1], treat as a wall boundary
+        elif (ct[i,j]+ct[i-1,j]) == 0:
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k + ny + 1] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 *
+                       (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - \
+                Av[k, k + ny + 1] + rho * dx * dy / dt + 2*mu*dy/dx # ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
+        # Outlet: do not access east cell, treat as a wall boundary            
+        elif (ct[i,j] + ct[i+1,j])==0:
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k - ny - 1] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] \
+                + rho * dx * dy / dt  + 2*mu*dy/dx# ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
         else:
             """
             TODO: Didn't cover inlet and outlet boundary. Actually accessing
@@ -305,28 +327,25 @@ def xv_back():
         v[i + 1, j + 1] = xv[i * ny + j]
 
 
+def solve_momentum():        
+    for steps in range(50):
+        residual = 10.0
+        residual_x = 0.0
+        residual_y = 0.0        
+        # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
+        while residual > 1e-5:
+            fill_Au()
+            fill_Av()
+            print("Residual = ", residual)
+            residual_x = quick_jacobian(Au, bu, xu, xu_new)
+            residual_y = quick_jacobian(Av, bv, xv, xv_new)
+            residual = residual_x + residual_y
+        xu_back()
+        xv_back()
+
 if __name__ == "__main__":
     init()
-#    fill_Au()
-    fill_Av()
-    for steps in range(2):
-        residual_x = 10.0
-        # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
-        fill_Au()
-        while residual_x > 1e-5:
-            print("Residual x = ", residual_x)
-            residual_x = quick_jacobian(Au, bu, xu, xu_new)
-            # xu = xu_new
-        xu_back()
-
-    residual_y = 10.0
-    while residual_y > 1e-8:
-        print("Residual y = ", residual_y)
-        residual_y = quick_jacobian(Av, bv, xv, xv_new)
-
-    xu_back()
-    xv_back()
-
+    solve_momentum()
     for j in range(ny+2):
         print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
     for j in range(ny+2):
