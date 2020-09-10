@@ -1,6 +1,6 @@
 import taichi as ti
 
-ti.init(default_fp=ti.f64, arch=ti.cpu)
+ti.init(default_fp = ti.f64, arch=ti.cpu)
 
 # Notes:
 # >>> for i in ti.ndrange(5):
@@ -42,7 +42,7 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 lx = 1.0
 ly = 0.1
 
-nx = 64
+nx = 128
 ny = 64
 
 rho = 1
@@ -75,18 +75,27 @@ v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 
 Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
-bu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xu_new = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-xuold = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
+Mu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
+bu = ti.field(dtype=ti.f64)
+xu = ti.field(dtype=ti.f64)
+xu_new = ti.field(dtype=ti.f64)
+xuold = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, (nx+1)*ny).place(bu, xu, xu_new, xuold)
 
-# for solving u momentum using CG
-Auxu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-ru = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-pu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-Aupu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny))
-# def conjgrad(A, x, Ax, r, p, Ap):
+# for solving u momentum using BiCG
+Auxu = ti.field(dtype=ti.f64)
+Aupu = ti.field(dtype=ti.f64)
+Aupu_tld = ti.field(dtype=ti.f64)
 
+ru = ti.field(dtype=ti.f64)
+pu = ti.field(dtype=ti.f64)
+zu = ti.field(dtype=ti.f64)
+ru_tld = ti.field(dtype=ti.f64)
+pu_tld = ti.field(dtype=ti.f64)
+zu_tld = ti.field(dtype=ti.f64)
+
+ti.root.dense(ti.i, (nx+1)*ny).place(Auxu, Aupu, Aupu_tld)
+ti.root.dense(ti.i, (nx+1)*ny).place(ru, pu, zu, ru_tld, pu_tld, zu_tld)
 
 Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
 bv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
@@ -120,7 +129,7 @@ def init():
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-        
+
         # Inlet
         # ct[i-1,j] is the left cell of u[i,j]
         # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block        
@@ -160,7 +169,9 @@ def fill_Au():
         elif (ct[i, j] + ct[i, j + 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
             Au[k, k] = Au[k, k] + Au[k, k + 1] + 2 * mu * dx/dy
             Au[k, k + 1] = 0
-
+    for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
+        k = (i - 1) * ny + (j - 1)
+        Mu[k,k] = 1.0 # Au[k,k]
 
 
 @ti.kernel
@@ -266,60 +277,101 @@ def quick_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: 
 
 
 @ti.kernel
-def conjgrad(A: ti.template(), x: ti.template(), b: ti.template(), Ax: ti.template(), r: ti.template(), p: ti.template(), Ap: ti.template()):
+def bicg(A:ti.template(),
+         b:ti.template(),
+         x:ti.template(),
+         M:ti.template(),
+         Ax:ti.template(),
+         Ap:ti.template(),
+         Ap_tld:ti.template(),
+         r:ti.template(),
+         p:ti.template(),
+         z:ti.template(),
+         r_tld:ti.template(),
+         p_tld:ti.template(),
+         z_tld:ti.template(),
+         nx:ti.i32,
+         ny:ti.i32):
+    
+    n = (nx+1) * ny
     # dot(A,x)
-    for i in range(x.shape[0]):
+    for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-ny-1, i+ny+2):
-            Ax[i] += A[i, j] * x[j]
+        for j in range(i-ny,i+ny+1):
+            Ax[i] += A[i,j] * x[j]
+            
     # r = b - dot(A,x)
-    # p = r
-    for i in range(x.shape[0]):
+    for i in range(n):
         r[i] = b[i] - Ax[i]
-        p[i] = r[i]
+        r_tld[i] = r[i]
+
     rsold = 0.0
-    for i in range(x.shape[0]):
+    for i in range(n):
         rsold += r[i] * r[i]
 
-    for steps in range(x.shape[0]):
-        # dot(A,p)
-        for i in range(x.shape[0]):
-            Ap[i] = 0.0
-            for j in range(i-ny-1, i+ny+2):
-                Ap[i] += A[i, j] * p[j]
+    print("The initial res is ", rsold)
+        
+    rho_1 = 1.0
+    for steps in range(n):
 
+        for i in range(n):
+            z[i] = 1.0 / M[i,i] * r[i]
+            z_tld[i] = 1.0 / M[i,i] * r_tld[i]
+            
+        rho = 0.0
+        for i in range(n):
+            rho += z[i] * r_tld[i]
+        if rho == 0.0:
+            print("Bicg failed...")
+
+        if steps == 0:
+            for i in range(n):
+                p[i] = z[i]
+                p_tld[i] = z_tld[i]
+        else:
+            beta = rho / rho_1
+            for i in range(n):
+                p[i] = z[i] + beta * p[i]
+                p_tld[i] = z_tld[i] + beta * p_tld[i]
+
+        # dot(A,p)
+        for i in range(n):
+            Ap[i] = 0.0
+            Ap_tld[i] = 0.0
+            for j in range(i-ny, i+ny+1):
+                # Ap => q
+                Ap[i] += A[i, j] * p[j]
+                # Ap_tld => q_tld
+                Ap_tld[i] += A[j, i] * p_tld[j]
+                
         # dot(p, Ap) => pAp
         pAp = 0.0
-        for i in range(x.shape[0]):
-            pAp += p[i] * Ap[i]
+        for i in range(n):
+            pAp += p_tld[i] * Ap[i]
 
-        alpha = rsold / pAp
+        alpha = rho / pAp
 
-        # x = x + dot(alpha,p)
-        # r = r - dot(alpha,Ap)
-        for i in range(x.shape[0]):
+        for i in range(n):
             x[i] += alpha * p[i]
             r[i] -= alpha * Ap[i]
+            r_tld[i] -= alpha * Ap_tld[i]
 
         rsnew = 0.0
-        for i in range(x.shape[0]):
+        for i in range(n):
             rsnew += r[i] * r[i]
-
-        if ti.sqrt(rsnew) < 1e-6:
+        rsold = rsnew
+        print("Iteration ", steps, ", residual = ", rsold)            
+            
+        if ti.sqrt(rsnew) < 1e-5:            
             print("The solution has converged...")
             break
-
-        for i in range(x.shape[0]):
-            p[i] = r[i] + (rsnew / rsold) * p[i]
-        rsold = rsnew
-        print(steps, rsold)
-
+        rho_1 = rho
+        
 
 @ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
         u[i + 1, j + 1] = xu[i * ny + j]
-
 
 @ti.kernel
 def xv_back():
@@ -343,9 +395,18 @@ def solve_momentum():
         xu_back()
         xv_back()
 
+def solve_momentum_bicg():
+    for steps in range(50):
+        fill_Au()
+        bicg(Au,bu,xu,Mu,Auxu,Aupu,Aupu_tld,ru,pu,zu,ru_tld,pu_tld,zu_tld,nx,ny)
+        xu_back()
+
 if __name__ == "__main__":
     init()
-    solve_momentum()
+    
+    # solve_momentum()
+    solve_momentum_bicg()    
+    
     for j in range(ny+2):
         print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
     for j in range(ny+2):
