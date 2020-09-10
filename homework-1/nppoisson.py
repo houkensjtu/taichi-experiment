@@ -5,7 +5,7 @@ from scipy.sparse.linalg import bicgstab
 from scipy.sparse.linalg import cg
 import time
 
-n = 16384
+n = 128
 
 A = np.zeros((n, n))
 b = np.zeros(n)
