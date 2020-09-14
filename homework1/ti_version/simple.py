@@ -1,6 +1,6 @@
 import taichi as ti
 
-ti.init(default_fp = ti.f64, arch=ti.cpu)
+ti.init(default_fp=ti.f64, arch=ti.cpu)
 
 # Notes:
 # >>> for i in ti.ndrange(5):
@@ -132,46 +132,46 @@ def fill_Au():
 
         # Inlet
         # ct[i-1,j] is the left cell of u[i,j]
-        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block        
+        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
         if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
             Au[k, k] = 1.0
             bu[k] = u[i, j]
         # Outlet
         # ct[i,j] is the right cell of u[i,j]
         elif (ct[i, j] == 1):
-            Au[k, k] = 1.0 # Au[k-ny,k-ny]
-            Au[k, k - ny] = -1.0 # -Au[k,k]
+            Au[k, k] = 1.0  # Au[k-ny,k-ny]
+            Au[k, k - ny] = -1.0  # -Au[k,k]
             bu[k] = 0.0
-        else:   
-        # Normal internal cells
+        else:
+            # Normal internal cells
             Au[k, k - 1] = -mu * dx / dy - \
-            ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
             Au[k, k + 1] = -mu * dx / dy - \
-            ti.max(0, rho * 0.5 *
-                  (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+                ti.max(0, rho * 0.5 *
+                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
             Au[k, k - ny] = -mu * dy / dx - \
-            ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
             Au[k, k + ny] = -mu * dy / dx - \
-            ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
             Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
-            Au[k, k + ny] + rho * dx * dy / dt  # ap
+                Au[k, k + ny] + rho * dx * dy / dt  # ap
             bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
-            dy / dt * u0[i, j]  # <= Unsteady term
-        
+                dy / dt * u0[i, j]  # <= Unsteady term
+
         # Upper and lower boundary
         # Excluded the inlet and outlet
-        if (ct[i, j] + ct[i, j - 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
+        if (ct[i, j] + ct[i, j - 1]) == 0 and ct[i, j] != 1 and ct[i-1, j] != 1:
             # Be careful it should be + Au[k,k-1] because it is minus.
             # Also, notice that 2*mu should be followed by dx/dy.
-            Au[k, k] = Au[k, k] + Au[k, k - 1] + 2 * mu * dx/dy 
+            Au[k, k] = Au[k, k] + Au[k, k - 1] + 2 * mu * dx/dy
             Au[k, k - 1] = 0
             # For second order wall visc: bu[k] += (p[i-1,j] - p[i,j])*rho/mu*dy/4
-        elif (ct[i, j] + ct[i, j + 1]) == 0 and ct[i,j] != 1 and ct[i-1,j] != 1:
+        elif (ct[i, j] + ct[i, j + 1]) == 0 and ct[i, j] != 1 and ct[i-1, j] != 1:
             Au[k, k] = Au[k, k] + Au[k, k + 1] + 2 * mu * dx/dy
             Au[k, k + 1] = 0
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-        Mu[k,k] = 1.0 # Au[k,k]
+        Mu[k, k] = Au[k, k]
 
 
 @ti.kernel
@@ -183,7 +183,7 @@ def fill_Av():
             Av[k, k] = 1.0
             bv[k] = v[i, j]
         # Inlet: do not access west cell A[k,k-ny-1], treat as a wall boundary
-        elif (ct[i,j]+ct[i-1,j]) == 0:
+        elif (ct[i, j]+ct[i-1, j]) == 0:
             Av[k, k - 1] = -mu * dx / dy - \
                 ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
             Av[k, k + 1] = -mu * dx / dy - \
@@ -192,11 +192,11 @@ def fill_Av():
                 ti.max(0, -rho * 0.5 *
                        (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
             Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - \
-                Av[k, k + ny + 1] + rho * dx * dy / dt + 2*mu*dy/dx # ap
+                Av[k, k + ny + 1] + rho * dx * dy / dt + 2*mu*dy/dx  # ap
             bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
                 rho * dx * dy / dt * v0[i, j]
-        # Outlet: do not access east cell, treat as a wall boundary            
-        elif (ct[i,j] + ct[i+1,j])==0:
+        # Outlet: do not access east cell, treat as a wall boundary
+        elif (ct[i, j] + ct[i+1, j]) == 0:
             Av[k, k - 1] = -mu * dx / dy - \
                 ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
             Av[k, k + 1] = -mu * dx / dy - \
@@ -204,7 +204,7 @@ def fill_Av():
             Av[k, k - ny - 1] = -mu * dy / dx - \
                 ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
             Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] \
-                + rho * dx * dy / dt  + 2*mu*dy/dx# ap
+                + rho * dx * dy / dt + 2*mu*dy/dx  # ap
             bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
                 rho * dx * dy / dt * v0[i, j]
         else:
@@ -277,29 +277,29 @@ def quick_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: 
 
 
 @ti.kernel
-def bicg(A:ti.template(),
-         b:ti.template(),
-         x:ti.template(),
-         M:ti.template(),
-         Ax:ti.template(),
-         Ap:ti.template(),
-         Ap_tld:ti.template(),
-         r:ti.template(),
-         p:ti.template(),
-         z:ti.template(),
-         r_tld:ti.template(),
-         p_tld:ti.template(),
-         z_tld:ti.template(),
-         nx:ti.i32,
-         ny:ti.i32):
-    
+def bicg(A: ti.template(),
+         b: ti.template(),
+         x: ti.template(),
+         M: ti.template(),
+         Ax: ti.template(),
+         Ap: ti.template(),
+         Ap_tld: ti.template(),
+         r: ti.template(),
+         p: ti.template(),
+         z: ti.template(),
+         r_tld: ti.template(),
+         p_tld: ti.template(),
+         z_tld: ti.template(),
+         nx: ti.i32,
+         ny: ti.i32):
+
     n = (nx+1) * ny
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-ny,i+ny+1):
-            Ax[i] += A[i,j] * x[j]
-            
+        for j in range(i-ny, i+ny+1):
+            Ax[i] += A[i, j] * x[j]
+
     # r = b - dot(A,x)
     for i in range(n):
         r[i] = b[i] - Ax[i]
@@ -310,14 +310,14 @@ def bicg(A:ti.template(),
         rsold += r[i] * r[i]
 
     print("The initial res is ", rsold)
-        
+
     rho_1 = 1.0
     for steps in range(n):
 
         for i in range(n):
-            z[i] = 1.0 / M[i,i] * r[i]
-            z_tld[i] = 1.0 / M[i,i] * r_tld[i]
-            
+            z[i] = 1.0 / M[i, i] * r[i]
+            z_tld[i] = 1.0 / M[i, i] * r_tld[i]
+
         rho = 0.0
         for i in range(n):
             rho += z[i] * r_tld[i]
@@ -343,7 +343,7 @@ def bicg(A:ti.template(),
                 Ap[i] += A[i, j] * p[j]
                 # Ap_tld => q_tld
                 Ap_tld[i] += A[j, i] * p_tld[j]
-                
+
         # dot(p, Ap) => pAp
         pAp = 0.0
         for i in range(n):
@@ -360,18 +360,19 @@ def bicg(A:ti.template(),
         for i in range(n):
             rsnew += r[i] * r[i]
         rsold = rsnew
-        print("Iteration ", steps, ", residual = ", rsold)            
-            
-        if ti.sqrt(rsnew) < 1e-5:            
+        print("Iteration ", steps, ", residual = ", rsold)
+
+        if ti.sqrt(rsnew) < 1e-5:
             print("The solution has converged...")
             break
         rho_1 = rho
-        
+
 
 @ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
         u[i + 1, j + 1] = xu[i * ny + j]
+
 
 @ti.kernel
 def xv_back():
@@ -379,11 +380,11 @@ def xv_back():
         v[i + 1, j + 1] = xv[i * ny + j]
 
 
-def solve_momentum():        
+def solve_momentum_jacob():
     for steps in range(50):
         residual = 10.0
         residual_x = 0.0
-        residual_y = 0.0        
+        residual_y = 0.0
         # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
         while residual > 1e-5:
             fill_Au()
@@ -395,18 +396,21 @@ def solve_momentum():
         xu_back()
         xv_back()
 
+
 def solve_momentum_bicg():
     for steps in range(50):
         fill_Au()
-        bicg(Au,bu,xu,Mu,Auxu,Aupu,Aupu_tld,ru,pu,zu,ru_tld,pu_tld,zu_tld,nx,ny)
+        bicg(Au, bu, xu, Mu, Auxu, Aupu, Aupu_tld, ru,
+             pu, zu, ru_tld, pu_tld, zu_tld, nx, ny)
         xu_back()
+
 
 if __name__ == "__main__":
     init()
-    
-    # solve_momentum()
-    solve_momentum_bicg()    
-    
+
+    # solve_momentum_jacob()
+    solve_momentum_bicg()
+
     for j in range(ny+2):
         print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
     for j in range(ny+2):

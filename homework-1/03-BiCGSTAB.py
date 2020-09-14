@@ -7,6 +7,11 @@
 # Results:
 # 1. For a 128 x 128 matrix A, the performance is 100x faster than Jacobian.
 # => About 0.18sec vs. 18sec using Jacobian.
+# 2. Compared with struct cg, bicg is about 60% slower because computing the A transpose
+# times p.
+# 3. At larger scale (>256), bicg with limited for loop range is much faster than
+# full loop bicg. On 1024 A matrix, full loop takes 12 sec while limited for loop
+# takes only 0.28sec.
 
 import taichi as ti
 import time
@@ -14,10 +19,10 @@ import time
 ti.init(default_fp=ti.f64)
 
 # Choose n = 99 so that the exact solution will be 1,2,3,...99
-n = 128
+n = 1024
 A = ti.field(dtype=ti.f64)
 M = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij, (n//8, n//8)).pointer(ti.ij, (8, 8)).place(A,M)
+ti.root.pointer(ti.ij, (n//8, n//8)).pointer(ti.ij, (8, 8)).place(A, M)
 #ti.root.dense(ti.ij, (n, n)).place(A,M)
 x = ti.field(dtype=ti.f64, shape=n)
 b = ti.field(dtype=ti.f64, shape=n)
@@ -35,12 +40,13 @@ r_tld = ti.field(dtype=ti.f64, shape=n)
 p_tld = ti.field(dtype=ti.f64, shape=n)
 z_tld = ti.field(dtype=ti.f64, shape=n)
 
+
 @ti.kernel
 def init():
     for i, j in ti.ndrange(n, n):
         if i == j:
             A[i, j] = 2.0
-            M[i, j] = A[i,j]
+            M[i, j] = A[i, j]
         elif ti.abs(i - j) == 1:
             A[i, j] = -1.0
     for i in x:
@@ -126,16 +132,16 @@ def struct_cg():
         print("Iteration ", steps, ", residual = ", rsold)
 
 
-
 @ti.func
 def bicg():
-    
+
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-1,i+2):
-            Ax[i] += A[i,j] * x[j]
-            
+        for j in range(i-1, i+2):
+            #        for j in range(n):
+            Ax[i] += A[i, j] * x[j]
+
     # r = b - dot(A,x)
     for i in range(n):
         r[i] = b[i] - Ax[i]
@@ -144,14 +150,14 @@ def bicg():
     rsold = 0.0
     for i in range(n):
         rsold += r[i] * r[i]
-        
+
     rho_1 = 1.0
     for steps in range(100*n):
 
         for i in range(n):
-            z[i] = 1.0 / M[i,i] * r[i]
-            z_tld[i] = 1.0 / M[i,i] * r_tld[i]
-            
+            z[i] = 1.0 / M[i, i] * r[i]
+            z_tld[i] = 1.0 / M[i, i] * r_tld[i]
+
         rho = 0.0
         for i in range(n):
             rho += z[i] * r_tld[i]
@@ -173,11 +179,12 @@ def bicg():
             Ap[i] = 0.0
             Ap_tld[i] = 0.0
             for j in range(i-1, i+2):
+                # for j in range(n):
                 # Ap => q
                 Ap[i] += A[i, j] * p[j]
                 # Ap_tld => q_tld
                 Ap_tld[i] += A[j, i] * p_tld[j]
-                
+
         # dot(p, Ap) => pAp
         pAp = 0.0
         for i in range(n):
@@ -194,19 +201,19 @@ def bicg():
         for i in range(n):
             rsnew += r[i] * r[i]
         rsold = rsnew
-        print("Iteration ", steps, ", residual = ", rsold)            
-            
-        if ti.sqrt(rsnew) < 1e-8:            
+        print("Iteration ", steps, ", residual = ", rsold)
+
+        if ti.sqrt(rsnew) < 1e-8:
             print("The solution has converged...")
             break
 
         rho_1 = rho
-        
-        
+
 
 @ti.kernel
 def main():
     bicg()
+    # struct_cg()
 
 
 if __name__ == "__main__":
