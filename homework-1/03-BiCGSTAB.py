@@ -12,6 +12,9 @@
 # 3. At larger scale (>256), bicg with limited for loop range is much faster than
 # full loop bicg. On 1024 A matrix, full loop takes 12 sec while limited for loop
 # takes only 0.28sec.
+# 4. Implemented BiCGSTAB and compared with BiCG.
+# At n = 1024, BiCGSTAB takes 0.36 sec while BiCG takes 0.28 sec (Both with limited for loop).
+# The result looks reasonable since BiCGSTAB has more calculation per loop.
 
 import taichi as ti
 import time
@@ -32,6 +35,13 @@ x_new = ti.field(dtype=ti.f64, shape=n)
 r = ti.field(dtype=ti.f64, shape=n)
 z = ti.field(dtype=ti.f64, shape=n)
 p = ti.field(dtype=ti.f64, shape=n)
+
+# For bicgstab...
+p_hat = ti.field(dtype=ti.f64, shape=n)
+s = ti.field(dtype=ti.f64, shape=n)
+s_hat = ti.field(dtype=ti.f64, shape=n)
+t = ti.field(dtype=ti.f64, shape=n)
+
 Ax = ti.field(dtype=ti.f64, shape=n)
 Ap = ti.field(dtype=ti.f64, shape=n)
 Ap_tld = ti.field(dtype=ti.f64, shape=n)
@@ -210,9 +220,100 @@ def bicg():
         rho_1 = rho
 
 
+@ti.func
+def bicgstab():
+
+    # dot(A,x)
+    for i in range(n):
+        Ax[i] = 0.0
+        for j in range(i-1, i+2):
+            #        for j in range(n):
+            Ax[i] += A[i, j] * x[j]
+
+    # r = b - dot(A,x)
+    for i in range(n):
+        r[i] = b[i] - Ax[i]
+        r_tld[i] = r[i]
+
+    omega = 1.0
+    alpha = 1.0
+    beta = 1.0
+    rho_1 = 1.0    
+    for steps in range(100*n):
+        
+        rho = 0.0
+        for i in range(n):
+            rho += r[i] * r_tld[i]
+        if rho == 0.0:
+            print("Bicg failed...")
+            
+        if steps == 0:
+            for i in range(n):
+                p[i] = r[i]
+        else:
+            beta = (rho / rho_1) * (alpha/omega)
+            for i in range(n):
+                p[i]  = r[i] + beta*(p[i] - omega*Ap[i])
+        for i in range(n):
+            p_hat[i] = 1/M[i,i] * p[i]
+        
+        # dot(A,p)
+        # Ap => v        
+        for i in range(n):
+            Ap[i] = 0.0
+            for j in range(i-1, i+2):
+                # for j in range(n):
+                Ap[i] += A[i, j] * p_hat[j]
+
+        alpha_lower = 0.0
+        for i in range(n):
+            alpha_lower += r_tld[i] * Ap[i]
+        alpha = rho / alpha_lower
+
+        for i in range(n):
+            s[i] = r[i] - alpha * Ap[i]
+
+        # Early convergnece check...
+        for i in range(n):
+            s_hat[i] = 1/M[i, i]*s[i]
+
+        for i in range(n):
+            t[i] = 0.0
+            for j in range(i-1, i+2):
+                # for j in range(n):
+                t[i] += A[i, j] * s_hat[j]
+
+        omega_upper = 0.0
+        omega_lower = 0.0
+        for i in range(n):
+            omega_upper += t[i] * s[i]
+            omega_lower += t[i] * t[i]
+        omega = omega_upper / omega_lower
+
+        for i in range(n):
+            x[i] += alpha* p_hat[i] + omega*s_hat[i]
+
+        for i in range(n):
+            r[i] = s[i] - omega*t[i]
+
+        residual = 0.0
+        for i in range(n):
+            residual += r[i] * r[i]
+        print("Iteration ", steps, ", residual = ", residual)
+        if ti.sqrt(residual) < 1e-8:
+            print("The solution has converged...")
+            break
+        if omega==0.0:
+            print("Omega = 0.0 ...")
+            break
+
+        rho_1 = rho
+
+
 @ti.kernel
 def main():
-    bicg()
+    # bicg()
+    bicgstab()
     # struct_cg()
 
 

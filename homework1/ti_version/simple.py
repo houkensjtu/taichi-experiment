@@ -1,4 +1,5 @@
 import taichi as ti
+import time
 
 ti.init(default_fp=ti.f64, arch=ti.cpu)
 
@@ -39,6 +40,16 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # Next step will be implementing the BiCGSTAB solver to replace Jacobian.
 # One remaining issue: In quick Jacobian, solver is accessing elements out of bounds.
 
+# Conclusions:
+# 1. Normal CG will diverge on u momentum eqn. because it's not symmetric.
+# 2. BiCG can converge on u momentum eqn. but the converge is slow and spiky.
+
+# 3. On a 128 x 64 field (eps = 1e-5), BiCG (with M) takes 77sec, Jacobian takes 57 sec to converge.
+#    So BiCG (with diag(A) as preconditioner) is no better than Jacobian.
+#    BiCG (with no preconditioner) took 19 sec and is much better than Jacobian.
+
+# 4. For the v momentum, bicg will fail when all v are zero because the initial rho = 0.
+
 lx = 1.0
 ly = 0.1
 
@@ -74,6 +85,7 @@ v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 # ct = 1 -> Solid
 ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 
+# for solving u momentum using BiCG
 Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
 Mu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
 bu = ti.field(dtype=ti.f64)
@@ -82,27 +94,42 @@ xu_new = ti.field(dtype=ti.f64)
 xuold = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(bu, xu, xu_new, xuold)
 
-# for solving u momentum using BiCG
 Auxu = ti.field(dtype=ti.f64)
 Aupu = ti.field(dtype=ti.f64)
 Aupu_tld = ti.field(dtype=ti.f64)
-
 ru = ti.field(dtype=ti.f64)
 pu = ti.field(dtype=ti.f64)
 zu = ti.field(dtype=ti.f64)
 ru_tld = ti.field(dtype=ti.f64)
 pu_tld = ti.field(dtype=ti.f64)
 zu_tld = ti.field(dtype=ti.f64)
-
 ti.root.dense(ti.i, (nx+1)*ny).place(Auxu, Aupu, Aupu_tld)
 ti.root.dense(ti.i, (nx+1)*ny).place(ru, pu, zu, ru_tld, pu_tld, zu_tld)
 
-Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
-bv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xv_new = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
-xvold = ti.field(dtype=ti.f64, shape=(nx * (ny + 1)))
 
+# for solving v momentum using BiCG
+Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
+Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
+bv = ti.field(dtype=ti.f64)
+xv = ti.field(dtype=ti.f64)
+xv_new = ti.field(dtype=ti.f64)
+xvold = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, nx*(ny+1)).place(bv, xv, xv_new, xvold)
+
+Avxv = ti.field(dtype=ti.f64)
+Avpv = ti.field(dtype=ti.f64)
+Avpv_tld = ti.field(dtype=ti.f64)
+rv = ti.field(dtype=ti.f64)
+pv = ti.field(dtype=ti.f64)
+zv = ti.field(dtype=ti.f64)
+rv_tld = ti.field(dtype=ti.f64)
+pv_tld = ti.field(dtype=ti.f64)
+zv_tld = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, nx*(ny+1)).place(Avxv, Avpv, Avpv_tld)
+ti.root.dense(ti.i, nx*(ny+1)).place(rv, pv, zv, rv_tld, pv_tld, zv_tld)
+
+
+# For pressure correction equation.
 Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
 bp = ti.field(dtype=ti.f64, shape=(nx * ny))
 xp = ti.field(dtype=ti.f64, shape=(nx * ny))
@@ -129,7 +156,6 @@ def init():
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-
         # Inlet
         # ct[i-1,j] is the left cell of u[i,j]
         # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
@@ -171,7 +197,10 @@ def fill_Au():
             Au[k, k + 1] = 0
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-        Mu[k, k] = Au[k, k]
+        # Mu[k,k] = Au[k,k]
+        Mu[k,k] = 1.0
+
+
 
 
 @ti.kernel
@@ -227,9 +256,9 @@ def fill_Av():
                 Av[k, k + ny + 1] + rho * dx * dy / dt  # ap
             bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
                 rho * dx * dy / dt * v0[i, j]
-#    for i in range(nx*(ny+1)):
-#        for j in range(nx*(ny+1)):
-#            print("Av[", i, ",", j, "] = ", Av[i,j])
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 2)):
+        k = (i - 1) * (ny + 1) + (j - 1)
+        Mv[k,k] = Av[k,k]
 
 
 @ti.kernel
@@ -276,6 +305,73 @@ def quick_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: 
     return ti.sqrt(res)
 
 
+
+# Quick version of conjugate gradient
+# Only multiply non-zero elements in A
+# Other calculations are exactly same
+
+@ti.kernel
+def struct_cg(
+         A: ti.template(),
+         b: ti.template(),
+         x: ti.template(),
+         Ax: ti.template(),
+         Ap: ti.template(),
+         r: ti.template(),
+         p: ti.template(),
+         nx: ti.i32,
+         ny: ti.i32):
+    n = (nx+1) * ny
+    # dot(A,x)
+    for i in range(n):
+        Ax[i] = 0.0
+        for j in range(i-ny, i+ny+1):
+            Ax[i] += A[i, j] * x[j]
+    # r = b - dot(A,x)
+    # p = r
+    for i in range(n):
+        r[i] = b[i] - Ax[i]
+        p[i] = r[i]
+    rsold = 0.0
+    for i in range(n):
+        rsold += r[i] * r[i]
+
+    for steps in range(100*n):
+        # dot(A,p)
+        for i in range(n):
+            Ap[i] = 0.0
+            for j in range(i-ny, i+ny+1):
+                Ap[i] += A[i, j] * p[j]
+
+        # dot(p, Ap) => pAp
+        pAp = 0.0
+        for i in range(n):
+            pAp += p[i] * Ap[i]
+
+        alpha = rsold / pAp
+
+        # x = x + dot(alpha,p)
+        # r = r - dot(alpha,Ap)
+        for i in range(n):
+            x[i] += alpha * p[i]
+            r[i] -= alpha * Ap[i]
+
+        rsnew = 0.0
+        for i in range(n):
+            rsnew += r[i] * r[i]
+
+        if ti.sqrt(rsnew) < 1e-8:
+            print("The solution has converged...")
+            break
+
+        for i in range(n):
+            p[i] = r[i] + (rsnew / rsold) * p[i]
+        rsold = rsnew
+
+        print("Iteration ", steps, ", residual = ", rsold)
+
+
+
 @ti.kernel
 def bicg(A: ti.template(),
          b: ti.template(),
@@ -291,13 +387,13 @@ def bicg(A: ti.template(),
          p_tld: ti.template(),
          z_tld: ti.template(),
          nx: ti.i32,
-         ny: ti.i32):
+         ny: ti.i32,
+         n: ti.i32):
 
-    n = (nx+1) * ny
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-ny, i+ny+1):
+        for j in range(i-ny-1, i+ny+2):
             Ax[i] += A[i, j] * x[j]
 
     # r = b - dot(A,x)
@@ -323,6 +419,7 @@ def bicg(A: ti.template(),
             rho += z[i] * r_tld[i]
         if rho == 0.0:
             print("Bicg failed...")
+            break
 
         if steps == 0:
             for i in range(n):
@@ -338,7 +435,7 @@ def bicg(A: ti.template(),
         for i in range(n):
             Ap[i] = 0.0
             Ap_tld[i] = 0.0
-            for j in range(i-ny, i+ny+1):
+            for j in range(i-ny-1, i+ny+2):
                 # Ap => q
                 Ap[i] += A[i, j] * p[j]
                 # Ap_tld => q_tld
@@ -385,7 +482,6 @@ def solve_momentum_jacob():
         residual = 10.0
         residual_x = 0.0
         residual_y = 0.0
-        # conjgrad(Au, xu, bu, Auxu, ru, pu, Aupu)
         while residual > 1e-5:
             fill_Au()
             fill_Av()
@@ -400,18 +496,29 @@ def solve_momentum_jacob():
 def solve_momentum_bicg():
     for steps in range(50):
         fill_Au()
+        fill_Av()
+        # Confirmed that bicg will give an answer for Au but the
+        # convergence is slow and spiky.
         bicg(Au, bu, xu, Mu, Auxu, Aupu, Aupu_tld, ru,
-             pu, zu, ru_tld, pu_tld, zu_tld, nx, ny)
+             pu, zu, ru_tld, pu_tld, zu_tld, nx, ny, (nx+1)*ny)
+        bicg(Av, bv, xv, Mv, Avxv, Avpv, Avpv_tld, rv,
+            pv, zv, rv_tld, pv_tld, zv_tld, nx, ny, nx*(ny+1))
+        # Confirmed that simple CG will diverge on this Au matrix.
+        #struct_cg(Au, bu, xu, Auxu, Aupu, ru, pu, nx, ny)
         xu_back()
+        xv_back()
 
 
 if __name__ == "__main__":
     init()
-
+    start = time.time()
     # solve_momentum_jacob()
     solve_momentum_bicg()
-
-    for j in range(ny+2):
-        print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
+    print("The velocity profile at the inlet:")
     for j in range(ny+2):
         print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
+    print("The velocity profile at the outlet:")        
+    for j in range(ny+2):
+        print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
+    print("The solution took ", time.time()-start," to solve the momentum.")
+        
