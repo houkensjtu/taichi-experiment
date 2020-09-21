@@ -48,6 +48,10 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 #    So BiCG (with diag(A) as preconditioner) is no better than Jacobian.
 #    BiCG (with no preconditioner) took 19 sec and is much better than Jacobian.
 
+#    For BiCGSTAB with M=diag(A), it took about 7 sec (10x faster than BiCG!)
+#    And with M=1.0, it took about 12 sec, showing different behavior than BiCG.
+#    Generally, the convergence is much much smoother than BiCG.
+
 # 4. For the v momentum, bicg will fail when all v are zero because the initial rho = 0.
 
 lx = 1.0
@@ -566,7 +570,7 @@ def bicgstab(A:ti.template(),
         for i in range(n):
             residual += r[i] * r[i]
         print("Iteration ", steps, ", residual = ", residual)
-        if ti.sqrt(residual) < 1e-3:
+        if ti.sqrt(residual) < 1e-5:
             print("The solution has converged...")
             break
         if omega==0.0:
@@ -621,7 +625,7 @@ def solve_momentum_bicg():
         xv_back()
 
 def solve_momentum_bicgstab():
-    for steps in range(20):
+    for steps in range(50):
         fill_Au()
         bicgstab(Au, bu, xu, Mu, Auxu, ru, ru_tld, pu, pu_hat,
                  Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny)
