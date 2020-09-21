@@ -106,6 +106,12 @@ zu_tld = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(Auxu, Aupu, Aupu_tld)
 ti.root.dense(ti.i, (nx+1)*ny).place(ru, pu, zu, ru_tld, pu_tld, zu_tld)
 
+# For solving u momentum using BiCGSTAB
+pu_hat = ti.field(dtype=ti.f64)
+su = ti.field(dtype=ti.f64)
+su_hat = ti.field(dtype=ti.f64)
+tu = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, (nx+1)*ny).place(pu_hat, su, su_hat, tu)
 
 # for solving v momentum using BiCG
 Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
@@ -197,8 +203,8 @@ def fill_Au():
             Au[k, k + 1] = 0
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
-        # Mu[k,k] = Au[k,k]
-        Mu[k,k] = 1.0
+        Mu[k,k] = Au[k,k]
+        # Mu[k,k] = 1.0
 
 
 
@@ -466,6 +472,112 @@ def bicg(A: ti.template(),
 
 
 @ti.kernel
+def bicgstab(A:ti.template(),
+             b:ti.template(),
+             x:ti.template(),
+             M:ti.template(),
+             Ax:ti.template(),
+             r:ti.template(),
+             r_tld:ti.template(),
+             p:ti.template(),
+             p_hat:ti.template(),
+             Ap:ti.template(),
+             s:ti.template(),
+             s_hat:ti.template(),
+             t:ti.template(),
+             nx:ti.i32,
+             ny:ti.i32,
+             n:ti.i32):
+    # dot(A,x)
+    for i in range(n):
+        Ax[i] = 0.0
+        for j in range(i-ny-1, i+ny+2):
+            #        for j in range(n):
+            Ax[i] += A[i, j] * x[j]
+
+    # r = b - dot(A,x)
+    for i in range(n):
+        r[i] = b[i] - Ax[i]
+        r_tld[i] = r[i]
+
+    omega = 1.0
+    alpha = 1.0
+    beta = 1.0
+    rho_1 = 1.0    
+    for steps in range(100*n):
+        
+        rho = 0.0
+        for i in range(n):
+            rho += r[i] * r_tld[i]
+        if rho == 0.0:
+            print("Bicgstab failed...")
+            break
+            
+        if steps == 0:
+            for i in range(n):
+                p[i] = r[i]
+        else:
+            beta = (rho / rho_1) * (alpha/omega)
+            for i in range(n):
+                p[i]  = r[i] + beta*(p[i] - omega*Ap[i])
+        for i in range(n):
+            p_hat[i] = 1/M[i,i] * p[i]
+        
+        # dot(A,p)
+        # Ap => v        
+        for i in range(n):
+            Ap[i] = 0.0
+            for j in range(i-ny-1, i+ny+2):
+                # for j in range(n):
+                Ap[i] += A[i, j] * p_hat[j]
+
+        alpha_lower = 0.0
+        for i in range(n):
+            alpha_lower += r_tld[i] * Ap[i]
+        alpha = rho / alpha_lower
+
+        for i in range(n):
+            s[i] = r[i] - alpha * Ap[i]
+
+        # Early convergnece check...
+        for i in range(n):
+            s_hat[i] = 1/M[i, i]*s[i]
+
+        for i in range(n):
+            t[i] = 0.0
+            for j in range(i-ny-1, i+ny+2):
+                # for j in range(n):
+                t[i] += A[i, j] * s_hat[j]
+
+        omega_upper = 0.0
+        omega_lower = 0.0
+        for i in range(n):
+            omega_upper += t[i] * s[i]
+            omega_lower += t[i] * t[i]
+        omega = omega_upper / omega_lower
+
+        for i in range(n):
+            x[i] += alpha* p_hat[i] + omega*s_hat[i]
+
+        for i in range(n):
+            r[i] = s[i] - omega*t[i]
+
+        residual = 0.0
+        for i in range(n):
+            residual += r[i] * r[i]
+        print("Iteration ", steps, ", residual = ", residual)
+        if ti.sqrt(residual) < 1e-3:
+            print("The solution has converged...")
+            break
+        if omega==0.0:
+            print("Omega = 0.0 ...")
+            break
+
+        rho_1 = rho
+
+        
+
+@ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
         u[i + 1, j + 1] = xu[i * ny + j]
@@ -508,12 +620,19 @@ def solve_momentum_bicg():
         xu_back()
         xv_back()
 
+def solve_momentum_bicgstab():
+    for steps in range(20):
+        fill_Au()
+        bicgstab(Au, bu, xu, Mu, Auxu, ru, ru_tld, pu, pu_hat,
+                 Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny)
+        xu_back()
 
 if __name__ == "__main__":
     init()
     start = time.time()
-    # solve_momentum_jacob()
-    solve_momentum_bicg()
+    #solve_momentum_jacob()
+    #solve_momentum_bicg()
+    solve_momentum_bicgstab()
     print("The velocity profile at the inlet:")
     for j in range(ny+2):
         print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
