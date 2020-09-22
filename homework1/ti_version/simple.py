@@ -1,5 +1,6 @@
 import taichi as ti
 import time
+import numpy as np
 
 ti.init(default_fp=ti.f64, arch=ti.cpu)
 
@@ -40,7 +41,7 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # Next step will be implementing the BiCGSTAB solver to replace Jacobian.
 # One remaining issue: In quick Jacobian, solver is accessing elements out of bounds.
 
-# Conclusions:
+# Linear solver
 # 1. Normal CG will diverge on u momentum eqn. because it's not symmetric.
 # 2. BiCG can converge on u momentum eqn. but the converge is slow and spiky.
 
@@ -54,6 +55,11 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 
 # 4. For the v momentum, bicg will fail when all v are zero because the initial rho = 0.
 
+# GUI Display
+# 1. Can only write a ti.GUI in main routine, cannot write as a separate function. Don't know why yet.
+# 2. u and v are interpolated into u_post and v_post, and then shown in gui.
+# 3. Image size needs to adjusted so that show actual aspect ratio lx/ly.
+
 lx = 1.0
 ly = 0.1
 
@@ -64,7 +70,7 @@ rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 1000000
+dt = 10000000
 
 # Relaxation factors
 velo_rel = 0.01
@@ -624,6 +630,7 @@ def solve_momentum_bicg():
         xu_back()
         xv_back()
 
+        
 def solve_momentum_bicgstab():
     for steps in range(50):
         fill_Au()
@@ -631,17 +638,35 @@ def solve_momentum_bicgstab():
                  Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny)
         xu_back()
 
+@ti.kernel        
+def post_velocity():
+    for i,j in ti.ndrange(nx+2,ny+2):
+        u_post[i,j] = 0.5 * (u[i,j] + u[i+1,j])
+        v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1])
+        
+
 if __name__ == "__main__":
     init()
     start = time.time()
+    
     #solve_momentum_jacob()
     #solve_momentum_bicg()
     solve_momentum_bicgstab()
+    
     print("The velocity profile at the inlet:")
     for j in range(ny+2):
         print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
     print("The velocity profile at the outlet:")        
     for j in range(ny+2):
         print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
-    print("The solution took ", time.time()-start," to solve the momentum.")
+    print("It took ", time.time()-start,"sec to solve the momentum.")
+
+    post_velocity()
+
+    gui = ti.GUI("velocity plot", (nx+2,2*(ny+2)))
+    img = np.concatenate((u_post.to_numpy(), v_post.to_numpy()), axis =1)
+    gui.set_image(img)
+    gui.show("sample.png")
+    
+    
         
