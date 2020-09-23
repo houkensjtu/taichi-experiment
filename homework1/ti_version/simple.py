@@ -64,8 +64,8 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 lx = 0.5
 ly = 0.1
 
-nx = 192
-ny = 64
+nx = 275
+ny = 55
 
 rho = 1
 mu = 0.01
@@ -85,11 +85,13 @@ u = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
 u0 = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
 ucor = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
 u_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+u_disp = ti.field(dtype=ti.f64, shape=(3 *(nx + 2), 3*(ny + 2)))
 
 v = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
 v0 = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
 vcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 3))
 v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+v_disp = ti.field(dtype=ti.f64, shape=(3*(nx + 2), 3*(ny + 2)))
 
 # ct stands for Cell Type.
 # ct = 0 -> Fluid
@@ -173,6 +175,18 @@ def init():
     for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
         ct[i, j] = -1  # "-1" stands for fluid
 
+
+def write_matrix(mat, name):
+    np.savetxt(name + ".csv", mat.to_numpy(), delimiter = ",")
+
+def visual_matrix(mat, name):
+    a = mat.to_numpy()
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as cm
+    # 'nearest' interpolation - faithful but blocky
+    plt.imshow(a, interpolation='nearest', cmap=cm.rainbow)
+    plt.colorbar()
+    plt.show()    
 
 @ti.kernel
 def fill_Au():
@@ -647,12 +661,21 @@ def solve_momentum_bicgstab():
                  Avpv, sv, sv_hat, tv, nx, ny, nx*(ny+1))
         xu_back()
         xv_back()
+    # write_matrix(Au, "Au")
+    # write_matrix(Av, "Av")    
 
 @ti.kernel        
 def post_velocity():
+    # Scale the velocity field so that max is <= 1.0.
+    u_scale = 0.6
+    v_scale = 0.6
     for i,j in ti.ndrange(nx+2,ny+2):
-        u_post[i,j] = 0.5 * (u[i,j] + u[i+1,j])
-        v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1])
+        u_post[i,j] = 0.5 * (u[i,j] + u[i+1,j]) * u_scale
+        v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1]) * v_scale
+    # Exterpolate velocity to a bigger canvas.        
+    for i,j in ti.ndrange(3*(nx+2),3*(ny+2)):
+        u_disp[i,j] = u_post[i//3, j//3]
+        v_disp[i,j] = v_post[i//3, j//3]        
         
 
 if __name__ == "__main__":
@@ -672,9 +695,8 @@ if __name__ == "__main__":
     print("It took ", time.time()-start,"sec to solve the momentum.")
 
     post_velocity()
-
-    gui = ti.GUI("velocity plot", (nx+2,2*(ny+2)))
-    img = np.concatenate((u_post.to_numpy(), v_post.to_numpy()), axis =1)
+    gui = ti.GUI("velocity plot", (3*(nx+2),6*(ny+2)))
+    img = np.concatenate((u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
     gui.set_image(img)
     gui.show("sample.png")
     
