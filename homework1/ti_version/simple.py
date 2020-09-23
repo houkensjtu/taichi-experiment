@@ -60,10 +60,11 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # 2. u and v are interpolated into u_post and v_post, and then shown in gui.
 # 3. Image size needs to adjusted so that show actual aspect ratio lx/ly.
 
-lx = 1.0
+# When lx and ly changed, the pressure drop also needs to be changed to reproduce the hagen flow cond.
+lx = 0.5
 ly = 0.1
 
-nx = 128
+nx = 192
 ny = 64
 
 rho = 1
@@ -95,7 +96,7 @@ v_post = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 # ct = 1 -> Solid
 ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 
-# for solving u momentum using BiCG
+# for solving u momentum using Jacobian
 Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
 Mu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
 bu = ti.field(dtype=ti.f64)
@@ -103,7 +104,7 @@ xu = ti.field(dtype=ti.f64)
 xu_new = ti.field(dtype=ti.f64)
 xuold = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(bu, xu, xu_new, xuold)
-
+# Additional vectors for BiCG
 Auxu = ti.field(dtype=ti.f64)
 Aupu = ti.field(dtype=ti.f64)
 Aupu_tld = ti.field(dtype=ti.f64)
@@ -115,15 +116,14 @@ pu_tld = ti.field(dtype=ti.f64)
 zu_tld = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(Auxu, Aupu, Aupu_tld)
 ti.root.dense(ti.i, (nx+1)*ny).place(ru, pu, zu, ru_tld, pu_tld, zu_tld)
-
-# For solving u momentum using BiCGSTAB
+# More additional vectors for BiCGSTAB
 pu_hat = ti.field(dtype=ti.f64)
 su = ti.field(dtype=ti.f64)
 su_hat = ti.field(dtype=ti.f64)
 tu = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(pu_hat, su, su_hat, tu)
 
-# for solving v momentum using BiCG
+# for solving v momentum using Jacobian
 Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
 Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
 bv = ti.field(dtype=ti.f64)
@@ -131,7 +131,7 @@ xv = ti.field(dtype=ti.f64)
 xv_new = ti.field(dtype=ti.f64)
 xvold = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, nx*(ny+1)).place(bv, xv, xv_new, xvold)
-
+# Additional vectors for BiCG
 Avxv = ti.field(dtype=ti.f64)
 Avpv = ti.field(dtype=ti.f64)
 Avpv_tld = ti.field(dtype=ti.f64)
@@ -143,6 +143,12 @@ pv_tld = ti.field(dtype=ti.f64)
 zv_tld = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, nx*(ny+1)).place(Avxv, Avpv, Avpv_tld)
 ti.root.dense(ti.i, nx*(ny+1)).place(rv, pv, zv, rv_tld, pv_tld, zv_tld)
+# More additional vectors for BiCGSTAB
+pv_hat = ti.field(dtype=ti.f64)
+sv = ti.field(dtype=ti.f64)
+sv_hat = ti.field(dtype=ti.f64)
+tv = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, nx*(ny+1)).place(pv_hat, sv, sv_hat, tv)
 
 
 # For pressure correction equation.
@@ -154,7 +160,7 @@ xp = ti.field(dtype=ti.f64, shape=(nx * ny))
 @ti.kernel
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
-        p[i, j] = 100 - 12.0 * i / nx
+        p[i, j] = 100 - 6.0 * i / nx
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
         u0[i, j] = u[i, j]
@@ -626,7 +632,7 @@ def solve_momentum_bicg():
         bicg(Av, bv, xv, Mv, Avxv, Avpv, Avpv_tld, rv,
             pv, zv, rv_tld, pv_tld, zv_tld, nx, ny, nx*(ny+1))
         # Confirmed that simple CG will diverge on this Au matrix.
-        #struct_cg(Au, bu, xu, Auxu, Aupu, ru, pu, nx, ny)
+        # struct_cg(Au, bu, xu, Auxu, Aupu, ru, pu, nx, ny)
         xu_back()
         xv_back()
 
@@ -634,9 +640,13 @@ def solve_momentum_bicg():
 def solve_momentum_bicgstab():
     for steps in range(50):
         fill_Au()
+        fill_Av()
         bicgstab(Au, bu, xu, Mu, Auxu, ru, ru_tld, pu, pu_hat,
                  Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny)
+        bicgstab(Av, bv, xv, Mv, Avxv, rv, rv_tld, pv, pv_hat,
+                 Avpv, sv, sv_hat, tv, nx, ny, nx*(ny+1))
         xu_back()
+        xv_back()
 
 @ti.kernel        
 def post_velocity():
