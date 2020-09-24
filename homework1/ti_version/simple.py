@@ -64,14 +64,14 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 lx = 0.5
 ly = 0.1
 
-nx = 275
-ny = 55
+nx = 500
+ny = 100
 
 rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 10000000
+dt = 0.001
 
 # Relaxation factors
 velo_rel = 0.01
@@ -99,8 +99,13 @@ v_disp = ti.field(dtype=ti.f64, shape=(3*(nx + 2), 3*(ny + 2)))
 ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 
 # for solving u momentum using Jacobian
-Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
-Mu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
+# Au = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
+# Mu = ti.field(dtype=ti.f64, shape=((nx + 1) * ny, (nx + 1) * ny))
+# Au and Mu declared as multiple layers to avoid virtual memory error.
+Au = ti.field(dtype=ti.f64)
+Mu = ti.field(dtype=ti.f64)
+ti.root.pointer(ti.ij,((nx+1)*ny//64,(nx+1)*ny//64)).dense(ti.ij,(8,8)).dense(ti.ij,(8,8)).place(Au, Mu)
+
 bu = ti.field(dtype=ti.f64)
 xu = ti.field(dtype=ti.f64)
 xu_new = ti.field(dtype=ti.f64)
@@ -126,8 +131,12 @@ tu = ti.field(dtype=ti.f64)
 ti.root.dense(ti.i, (nx+1)*ny).place(pu_hat, su, su_hat, tu)
 
 # for solving v momentum using Jacobian
-Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
-Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
+# Av = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
+# Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
+Av = ti.field(dtype=ti.f64)
+Mv = ti.field(dtype=ti.f64)
+ti.root.pointer(ti.ij,(nx*(ny+1)//64,nx*(ny+1)//64)).dense(ti.ij,(8,8)).dense(ti.ij,(8,8)).place(Av, Mv)
+
 bv = ti.field(dtype=ti.f64)
 xv = ti.field(dtype=ti.f64)
 xv_new = ti.field(dtype=ti.f64)
@@ -154,9 +163,9 @@ ti.root.dense(ti.i, nx*(ny+1)).place(pv_hat, sv, sv_hat, tv)
 
 
 # For pressure correction equation.
-Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
-bp = ti.field(dtype=ti.f64, shape=(nx * ny))
-xp = ti.field(dtype=ti.f64, shape=(nx * ny))
+# Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
+# bp = ti.field(dtype=ti.f64, shape=(nx * ny))
+# xp = ti.field(dtype=ti.f64, shape=(nx * ny))
 
 
 @ti.kernel
@@ -235,8 +244,6 @@ def fill_Au():
         k = (i - 1) * ny + (j - 1)
         Mu[k,k] = Au[k,k]
         # Mu[k,k] = 1.0
-
-
 
 
 @ti.kernel
@@ -521,8 +528,8 @@ def bicgstab(A:ti.template(),
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
-        for j in range(i-ny-1, i+ny+2):
-            #        for j in range(n):
+        # Only traverse certain elements. Need to use ti.static() to convert python list.        
+        for j in ti.static([i-ny-1,i-ny,i-1,i,i+1,i+ny,i+ny+1]):        
             Ax[i] += A[i, j] * x[j]
 
     # r = b - dot(A,x)
@@ -557,8 +564,8 @@ def bicgstab(A:ti.template(),
         # Ap => v        
         for i in range(n):
             Ap[i] = 0.0
-            for j in range(i-ny-1, i+ny+2):
-                # for j in range(n):
+            # Only traverse certain elements. Need to use ti.static() to convert python list.
+            for j in ti.static([i-ny-1,i-ny,i-1,i,i+1,i+ny,i+ny+1]):
                 Ap[i] += A[i, j] * p_hat[j]
 
         alpha_lower = 0.0
@@ -575,8 +582,8 @@ def bicgstab(A:ti.template(),
 
         for i in range(n):
             t[i] = 0.0
-            for j in range(i-ny-1, i+ny+2):
-                # for j in range(n):
+            # Only traverse certain elements. Need to use ti.static() to convert python list.            
+            for j in ti.static([i-ny-1,i-ny,i-1,i,i+1,i+ny,i+ny+1]):
                 t[i] += A[i, j] * s_hat[j]
 
         omega_upper = 0.0
