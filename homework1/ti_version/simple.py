@@ -64,14 +64,14 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 lx = 0.5
 ly = 0.1
 
-nx = 500
-ny = 100
+nx = 400
+ny = 80
 
 rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 0.001
+dt = 10000000
 
 # Relaxation factors
 velo_rel = 0.01
@@ -80,6 +80,10 @@ p_rel = 0.03
 # Add 1 cell padding to all directions.
 p = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
 pcor = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+p_disp = ti.field(dtype=ti.f64, shape=(3 *(nx + 2), 3*(ny + 2)))
+pcor_disp = ti.field(dtype=ti.f64, shape=(3 *(nx + 2), 3*(ny + 2)))
+udiv = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
+udiv_disp = ti.field(dtype=ti.f64, shape=(3 *(nx + 2), 3*(ny + 2)))
 
 u = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
 u0 = ti.field(dtype=ti.f64, shape=(nx + 3, ny + 2))
@@ -186,6 +190,7 @@ def init():
 
 
 def write_matrix(mat, name):
+    print("    >> Writing matrix data to", name, ".csv ...")
     np.savetxt(name + ".csv", mat.to_numpy(), delimiter = ",")
 
 def visual_matrix(mat, name):
@@ -363,7 +368,9 @@ def struct_cg(
          r: ti.template(),
          p: ti.template(),
          nx: ti.i32,
-         ny: ti.i32):
+         ny: ti.i32,
+         eps: ti.f64,
+         output: ti.i32):
     n = (nx+1) * ny
     # dot(A,x)
     for i in range(n):
@@ -403,15 +410,17 @@ def struct_cg(
         for i in range(n):
             rsnew += r[i] * r[i]
 
-        if ti.sqrt(rsnew) < 1e-8:
-            print("The solution has converged...")
+        if ti.sqrt(rsnew) < eps:
+            if output:
+                print("        >> The solution has converged...")
             break
 
         for i in range(n):
             p[i] = r[i] + (rsnew / rsold) * p[i]
         rsold = rsnew
-
-        print("Iteration ", steps, ", residual = ", rsold)
+        
+        if output:
+            print("        >> Iteration ", steps, ", residual = ", rsold)
 
 
 
@@ -431,7 +440,9 @@ def bicg(A: ti.template(),
          z_tld: ti.template(),
          nx: ti.i32,
          ny: ti.i32,
-         n: ti.i32):
+         n: ti.i32,
+         eps: ti.f64,
+         output: ti.i32):
 
     # dot(A,x)
     for i in range(n):
@@ -448,7 +459,8 @@ def bicg(A: ti.template(),
     for i in range(n):
         rsold += r[i] * r[i]
 
-    print("The initial res is ", rsold)
+    if output:
+        print("        >> The initial res is ", rsold)
 
     rho_1 = 1.0
     for steps in range(n):
@@ -461,7 +473,8 @@ def bicg(A: ti.template(),
         for i in range(n):
             rho += z[i] * r_tld[i]
         if rho == 0.0:
-            print("Bicg failed...")
+            if output:
+                print("        >> Bicg failed...")
             break
 
         if steps == 0:
@@ -500,10 +513,12 @@ def bicg(A: ti.template(),
         for i in range(n):
             rsnew += r[i] * r[i]
         rsold = rsnew
-        print("Iteration ", steps, ", residual = ", rsold)
+        if output:
+            print("        >> Iteration ", steps, ", residual = ", rsold)
 
-        if ti.sqrt(rsnew) < 1e-5:
-            print("The solution has converged...")
+        if ti.sqrt(rsnew) < eps:
+            if output:
+                print("        >> The solution has converged...")
             break
         rho_1 = rho
 
@@ -524,7 +539,9 @@ def bicgstab(A:ti.template(),
              t:ti.template(),
              nx:ti.i32,
              ny:ti.i32,
-             n:ti.i32):
+             n:ti.i32,
+             eps: ti.f64,
+             output:ti.i32):
     # dot(A,x)
     for i in range(n):
         Ax[i] = 0.0
@@ -547,7 +564,8 @@ def bicgstab(A:ti.template(),
         for i in range(n):
             rho += r[i] * r_tld[i]
         if rho == 0.0:
-            print("Bicgstab failed...")
+            if output:
+                print("        >> Bicgstab failed...")
             break
             
         if steps == 0:
@@ -602,14 +620,19 @@ def bicgstab(A:ti.template(),
         residual = 0.0
         for i in range(n):
             residual += r[i] * r[i]
-        print("Iteration ", steps, ", residual = ", residual)
-        if ti.sqrt(residual) < 1e-5:
-            print("The solution has converged...")
+        if output:            
+            print("        >> Iteration ", steps, ", residual = ", residual)
+            
+        if ti.sqrt(residual) < eps:
+            if output:
+                print("        >> The solution has converged...")
             break
+        
         if omega==0.0:
-            print("Omega = 0.0 ...")
+            if output:
+                print("        >> Omega = 0.0 ...")
             break
-
+        
         rho_1 = rho
 
         
@@ -642,70 +665,106 @@ def solve_momentum_jacob():
         xv_back()
 
 
-def solve_momentum_bicg():
-    for steps in range(50):
+def solve_momentum_bicg(eps, max_iterations, solve_output, linalg_output):
+    print("    >> Now Solving momentum equations using BiCG...")    
+    for steps in range(max_iterations):
+        if solve_output:
+            print("    [", steps,"/",max_iterations, "] Iteratively solving momentum equation using BiCG...")            
         fill_Au()
         fill_Av()
         # Confirmed that bicg will give an answer for Au but the
         # convergence is slow and spiky.
         bicg(Au, bu, xu, Mu, Auxu, Aupu, Aupu_tld, ru,
-             pu, zu, ru_tld, pu_tld, zu_tld, nx, ny, (nx+1)*ny)
+             pu, zu, ru_tld, pu_tld, zu_tld, nx, ny, (nx+1)*ny, eps, linalg_output)
         bicg(Av, bv, xv, Mv, Avxv, Avpv, Avpv_tld, rv,
-            pv, zv, rv_tld, pv_tld, zv_tld, nx, ny, nx*(ny+1))
+             pv, zv, rv_tld, pv_tld, zv_tld, nx, ny, nx*(ny+1), eps, linalg_output)
         # Confirmed that simple CG will diverge on this Au matrix.
         # struct_cg(Au, bu, xu, Auxu, Aupu, ru, pu, nx, ny)
         xu_back()
         xv_back()
 
-        
-def solve_momentum_bicgstab():
-    for steps in range(50):
+# solve_output contorls whether show iteration history of momentum eqn.
+# linalg_output controls whether show convergence of BiCGSTAB solver.
+def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
+    print("    >> Now Solving momentum equations using BiCGSTAB...")
+    for steps in range(max_iterations):
+        if solve_output:
+            print("    [", steps,"/",max_iterations, "] Iteratively solving momentum equation using BiCGSTAB...")
         fill_Au()
         fill_Av()
         bicgstab(Au, bu, xu, Mu, Auxu, ru, ru_tld, pu, pu_hat,
-                 Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny)
+                 Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny, eps, linalg_output)
         bicgstab(Av, bv, xv, Mv, Avxv, rv, rv_tld, pv, pv_hat,
-                 Avpv, sv, sv_hat, tv, nx, ny, nx*(ny+1))
+                 Avpv, sv, sv_hat, tv, nx, ny, nx*(ny+1), eps, linalg_output)
         xu_back()
         xv_back()
     # write_matrix(Au, "Au")
     # write_matrix(Av, "Av")    
 
 @ti.kernel        
-def post_velocity():
-    # Scale the velocity field so that max is <= 1.0.
-    u_scale = 0.6
-    v_scale = 0.6
+def post_process_field():
+    # First, interpolate u,v onto the center of a cell
     for i,j in ti.ndrange(nx+2,ny+2):
-        u_post[i,j] = 0.5 * (u[i,j] + u[i+1,j]) * u_scale
-        v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1]) * v_scale
+        u_post[i,j] = 0.5 * (u[i,j] + u[i+1,j])
+        v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1])
+        
+    # Calculate the divergence of the velocity field
+    for i,j in ti.ndrange(nx+2, ny+2):
+        udiv[i,j] = (u[i,j] - u[i+1,j]) * dy + (v[i,j] - v[i,j+1]) * dx
+        
     # Exterpolate velocity to a bigger canvas.        
     for i,j in ti.ndrange(3*(nx+2),3*(ny+2)):
         u_disp[i,j] = u_post[i//3, j//3]
-        v_disp[i,j] = v_post[i//3, j//3]        
-        
+        v_disp[i,j] = v_post[i//3, j//3]
+        udiv_disp[i,j] = udiv[i//3, j//3]
+        p_disp[i,j] = p[i//3, j//3]
+        pcor_disp[i,j] = pcor[i//3, j//3]
+
+    # Scale the value of display field to range [0,1]
+    scale_field(u_disp)
+    scale_field(v_disp)
+    scale_field(p_disp)
+    scale_field(pcor_disp)
+    scale_field(udiv_disp)
+
+
+@ti.func
+def scale_field(f: ti.template()):
+    f_max = 0.0
+    f_min = 1.0e9
+    for i,j in f:
+        if f[i,j] > f_max:
+            f_max = f[i,j]
+        if f[i,j] < f_min:
+            f_min = f[i,j]
+    for i,j in f:
+        f[i,j] = (f[i,j] - f_min) / (f_max - f_min + 1.0e-9)
+    
 
 if __name__ == "__main__":
     init()
-    start = time.time()
     
+    start = time.time()
     #solve_momentum_jacob()
     #solve_momentum_bicg()
-    solve_momentum_bicgstab()
-    
-    print("The velocity profile at the inlet:")
-    for j in range(ny+2):
-        print("i = ", 1, ", j = ", j, ", u = ", u[1, j])
-    print("The velocity profile at the outlet:")        
-    for j in range(ny+2):
-        print("i = ", nx+1, ", j = ", j, ", u = ", u[nx+1, j])
-    print("It took ", time.time()-start,"sec to solve the momentum.")
+    # (eps, max_iterations, solver_output, linalg_output)
+    solve_momentum_bicgstab(1e-6, 50, 1, 0)
+    print("    >> It took ", time.time()-start,"sec to solve the momentum equation.")
 
-    post_velocity()
-    gui = ti.GUI("velocity plot", (3*(nx+2),6*(ny+2)))
-    img = np.concatenate((u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
+    # Use write function to output matrix as desired.    
+    write_matrix(u, "u")
+
+    post_process_field()
+
+    gui = ti.GUI("velocity plot", (3*(nx+2),15*(ny+2)))
+    img = np.concatenate((pcor_disp.to_numpy(), udiv_disp.to_numpy(), p_disp.to_numpy(), u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
     gui.set_image(img)
+
+    text_color = 0x3355ff
+    gui.text(content = "P correction"  , pos = (0.5,0.1), font_size = 20, color=text_color )
+    gui.text(content = "Velocity div", pos = (0.5,0.3), font_size = 20, color=text_color )
+    gui.text(content = "Pressure", pos = (0.5,0.5), font_size = 20, color=text_color )
+    gui.text(content = "U velocity", pos = (0.5,0.7), font_size = 20, color=text_color )
+    gui.text(content = "V velocity", pos = (0.5,0.9), font_size = 20, color=text_color )
+    
     gui.show("sample.png")
-    
-    
-        
