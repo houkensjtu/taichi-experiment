@@ -14,7 +14,6 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # (3,)
 # (4,)
 
-
 # Problems:
 
 # fill_Au
@@ -61,11 +60,17 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # 3. Image size needs to adjusted so that show actual aspect ratio lx/ly.
 
 # When lx and ly changed, the pressure drop also needs to be changed to reproduce the hagen flow cond.
+
+# fill_Ap
+# 1. Be careful with the nx and ny settings. Because you might lose cells if nx or ny is not divisible
+#    by 8 when allocating pointer structures.
+
 lx = 0.5
 ly = 0.1
 
-nx = 400
-ny = 80
+# nx and ny have to be multiples of 8.
+nx = 320
+ny = 64
 
 rho = 1
 mu = 0.01
@@ -108,7 +113,7 @@ ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 # Au and Mu declared as multiple layers to avoid virtual memory error.
 Au = ti.field(dtype=ti.f64)
 Mu = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij,((nx+1)*ny//64,(nx+1)*ny//64)).dense(ti.ij,(8,8)).dense(ti.ij,(8,8)).place(Au, Mu)
+ti.root.pointer(ti.ij,((nx+1)*ny//8,(nx+1)*ny//8)).dense(ti.ij,(8,8)).place(Au, Mu)
 
 bu = ti.field(dtype=ti.f64)
 xu = ti.field(dtype=ti.f64)
@@ -139,7 +144,7 @@ ti.root.dense(ti.i, (nx+1)*ny).place(pu_hat, su, su_hat, tu)
 # Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
 Av = ti.field(dtype=ti.f64)
 Mv = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij,(nx*(ny+1)//64,nx*(ny+1)//64)).dense(ti.ij,(8,8)).dense(ti.ij,(8,8)).place(Av, Mv)
+ti.root.pointer(ti.ij,(nx*(ny+1)//8,nx*(ny+1)//8)).dense(ti.ij,(8,8)).place(Av, Mv)
 
 bv = ti.field(dtype=ti.f64)
 xv = ti.field(dtype=ti.f64)
@@ -167,9 +172,22 @@ ti.root.dense(ti.i, nx*(ny+1)).place(pv_hat, sv, sv_hat, tv)
 
 
 # For pressure correction equation.
-# Ap = ti.field(dtype=ti.f64, shape=(nx * ny, nx * ny))
-# bp = ti.field(dtype=ti.f64, shape=(nx * ny))
-# xp = ti.field(dtype=ti.f64, shape=(nx * ny))
+Ap = ti.field(dtype=ti.f64)
+Mp = ti.field(dtype=ti.f64)
+ti.root.pointer(ti.ij,(nx*ny//8,nx*ny//8)).dense(ti.ij,(8,8)).place(Ap, Mp)
+
+bp = ti.field(dtype=ti.f64)
+xp = ti.field(dtype=ti.f64)
+Apxp = ti.field(dtype=ti.f64)
+rp = ti.field(dtype=ti.f64)
+rp_tld = ti.field(dtype=ti.f64)
+pp = ti.field(dtype=ti.f64)
+pp_hat = ti.field(dtype=ti.f64)
+Appp = ti.field(dtype=ti.f64)
+sp = ti.field(dtype=ti.f64)
+sp_hat = ti.field(dtype=ti.f64)
+tp = ti.field(dtype=ti.f64)
+ti.root.dense(ti.i, nx * ny).place(bp, xp, Apxp, rp, rp_tld, pp, pp_hat, Appp, sp, sp_hat, tp)
 
 
 @ti.kernel
@@ -193,6 +211,7 @@ def write_matrix(mat, name):
     print("    >> Writing matrix data to", name, ".csv ...")
     np.savetxt(name + ".csv", mat.to_numpy(), delimiter = ",")
 
+    
 def visual_matrix(mat, name):
     a = mat.to_numpy()
     import matplotlib.pyplot as plt
@@ -202,6 +221,7 @@ def visual_matrix(mat, name):
     plt.colorbar()
     plt.show()    
 
+    
 @ti.kernel
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
@@ -353,11 +373,9 @@ def quick_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: 
     return ti.sqrt(res)
 
 
-
 # Quick version of conjugate gradient
 # Only multiply non-zero elements in A
 # Other calculations are exactly same
-
 @ti.kernel
 def struct_cg(
          A: ti.template(),
@@ -634,7 +652,6 @@ def bicgstab(A:ti.template(),
             break
         
         rho_1 = rho
-
         
 
 @ti.kernel
@@ -683,6 +700,7 @@ def solve_momentum_bicg(eps, max_iterations, solve_output, linalg_output):
         xu_back()
         xv_back()
 
+        
 # solve_output contorls whether show iteration history of momentum eqn.
 # linalg_output controls whether show convergence of BiCGSTAB solver.
 def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
@@ -701,6 +719,7 @@ def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
     # write_matrix(Au, "Au")
     # write_matrix(Av, "Av")    
 
+    
 @ti.kernel        
 def post_process_field():
     # First, interpolate u,v onto the center of a cell
@@ -709,8 +728,9 @@ def post_process_field():
         v_post[i,j] = 0.5 * (v[i,j] + v[i,j+1])
         
     # Calculate the divergence of the velocity field
-    for i,j in ti.ndrange(nx+2, ny+2):
-        udiv[i,j] = (u[i,j] - u[i+1,j]) * dy + (v[i,j] - v[i,j+1]) * dx
+    # udiv is of [nx+2, ny+2] size but only calculated in [(1,nx+1), (1,ny+1)] area.
+    for i,j in ti.ndrange((1,nx+1), (1,ny+1)):
+        udiv[i,j] = (u[i,j] - u[i+1,j]) * dy + (v[i,j+1] - v[i,j]) * dx
         
     # Exterpolate velocity to a bigger canvas.        
     for i,j in ti.ndrange(3*(nx+2),3*(ny+2)):
@@ -729,7 +749,7 @@ def post_process_field():
 
 
 @ti.func
-def scale_field(f: ti.template()):
+def scale_field(f):
     f_max = 0.0
     f_min = 1.0e9
     for i,j in f:
@@ -739,22 +759,58 @@ def scale_field(f: ti.template()):
             f_min = f[i,j]
     for i,j in f:
         f[i,j] = (f[i,j] - f_min) / (f_max - f_min + 1.0e-9)
+
+        
+@ti.kernel
+def correct_conserv():
+    mdot_inlet = 0.0
+    mdot_outlet = 0.0
+    coef = 1.0
+    
+    for j in range(1,ny+1):
+        mdot_inlet += u[1, j]
+        mdot_outlet += u[nx+1, j]
+    
+    # print("        >> Before correction, the mass flow at the inlet is", mdot_inlet)
+    # print("        >> Before correction, the mass flow at the outlet is", mdot_outlet)    
+    coef = mdot_inlet / mdot_outlet
+    
+    for j in range(1,ny+1):
+        u[nx+1, j] = coef * u[nx+1, j]
+
+    mdot_outlet = 0.0
+    for j in range(1,ny+1):
+        mdot_outlet += u[nx+1, j]
+    # print("        >> After correction, the mass flow at the outlet is", mdot_outlet)
+
+    # Check the overall divergence of the whole velocity field. Should be zero
+    # after correction.
+    udiv_overall = 0.0
+    for i,j in ti.ndrange((1,nx+1), (1,ny+1)):
+        udiv[i, j] = (u[i, j] - u[i+1, j]) * dy + (v[i, j+1] - v[i, j]) * dx
+        udiv_overall += udiv[i, j]
+    # print("The overall divergence of velocity after correction is", udiv_overall)
+    
     
 
 if __name__ == "__main__":
     init()
+    for timestep in range(1):
+        start = time.time()
+        #solve_momentum_jacob()
+        #solve_momentum_bicg()
+        # (eps, max_iterations, solver_output, linalg_output)
+        solve_momentum_bicgstab(1e-6, 50, 1, 0)
+        print("    >> It took ", time.time()-start,"sec to solve the momentum equation.")
+
+        # Use write function to output matrix as desired.    
+        # write_matrix(Au, "Au")
+        # write_matrix(Av, "Av")
+        # print("THe shape of Au is ", Au.shape)
+        # print("The shape of Av is ", Av.shape)
     
-    start = time.time()
-    #solve_momentum_jacob()
-    #solve_momentum_bicg()
-    # (eps, max_iterations, solver_output, linalg_output)
-    solve_momentum_bicgstab(1e-6, 50, 1, 0)
-    print("    >> It took ", time.time()-start,"sec to solve the momentum equation.")
-
-    # Use write function to output matrix as desired.    
-    write_matrix(u, "u")
-
-    post_process_field()
+        correct_conserv()
+        post_process_field()
 
     gui = ti.GUI("velocity plot", (3*(nx+2),15*(ny+2)))
     img = np.concatenate((pcor_disp.to_numpy(), udiv_disp.to_numpy(), p_disp.to_numpy(), u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
