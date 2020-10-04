@@ -64,6 +64,20 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # fill_Ap
 # 1. Be careful with the nx and ny settings. Because you might lose cells if nx or ny is not divisible
 #    by 8 when allocating pointer structures.
+# 2. Accessing elements out of bound is causing error in Ap calculations. For example when A[-1,0] != 0.0,
+#    it will be added to Ap[0, 0].
+
+# Problems with p correction:
+# 1. P correction seems to be proportional to grid size. The smaller the grid, the bigger the correction.
+#    => My current explanation: the fix velocity inlet is creating 2 singular point on the corner, and
+#       generating unlimited source of p correction. Therefore, switched to neumann boundary for both
+#       inlet and outlet velocity. Pressure on the inlet is fixed ( p correction on the corner is zero).
+#    => Under-relaxation coef for p can be ~0.1. It seems that momentum eqn. needs to be solved to a
+#       relative low residual in order to ensure convergence (currently 1.0e-15, 30 cycles).
+# 2. V momentum xv_back() was wrong => Now corrected.
+# 3. Try to get the under-relaxation coef. right. The current understanding might be wrong.
+# 4. Implemented a convergence checker in puv_correction: simply add up pcor in every cell and return its
+#    norm as a indicator for convergence.
 
 lx = 0.5
 ly = 0.1
@@ -71,16 +85,17 @@ ly = 0.1
 # nx and ny have to be multiples of 8.
 nx = 320
 ny = 64
+ptr_size = 16
 
 rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 10000000
+dt = 1000000000
 
 # Relaxation factors
-velo_rel = 0.01
-p_rel = 0.03
+velo_rel = 0.08
+p_rel = 0.05
 
 # Add 1 cell padding to all directions.
 p = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
@@ -113,7 +128,7 @@ ct = ti.field(dtype=ti.i32, shape=(nx + 2, ny + 2))
 # Au and Mu declared as multiple layers to avoid virtual memory error.
 Au = ti.field(dtype=ti.f64)
 Mu = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij,((nx+1)*ny//8,(nx+1)*ny//8)).dense(ti.ij,(8,8)).place(Au, Mu)
+ti.root.pointer(ti.ij,((nx+1)*ny//ptr_size,(nx+1)*ny//ptr_size)).dense(ti.ij,(ptr_size,ptr_size)).place(Au, Mu)
 
 bu = ti.field(dtype=ti.f64)
 xu = ti.field(dtype=ti.f64)
@@ -144,7 +159,7 @@ ti.root.dense(ti.i, (nx+1)*ny).place(pu_hat, su, su_hat, tu)
 # Mv = ti.field(dtype=ti.f64, shape=(nx * (ny + 1), nx * (ny + 1)))
 Av = ti.field(dtype=ti.f64)
 Mv = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij,(nx*(ny+1)//8,nx*(ny+1)//8)).dense(ti.ij,(8,8)).place(Av, Mv)
+ti.root.pointer(ti.ij,(nx*(ny+1)//ptr_size,nx*(ny+1)//ptr_size)).dense(ti.ij,(ptr_size,ptr_size)).place(Av, Mv)
 
 bv = ti.field(dtype=ti.f64)
 xv = ti.field(dtype=ti.f64)
@@ -174,7 +189,7 @@ ti.root.dense(ti.i, nx*(ny+1)).place(pv_hat, sv, sv_hat, tv)
 # For pressure correction equation.
 Ap = ti.field(dtype=ti.f64)
 Mp = ti.field(dtype=ti.f64)
-ti.root.pointer(ti.ij,(nx*ny//8,nx*ny//8)).dense(ti.ij,(8,8)).place(Ap, Mp)
+ti.root.pointer(ti.ij,(nx*ny//ptr_size,nx*ny//ptr_size)).dense(ti.ij,(ptr_size,ptr_size)).place(Ap, Mp)
 
 bp = ti.field(dtype=ti.f64)
 xp = ti.field(dtype=ti.f64)
@@ -196,10 +211,10 @@ def init():
         p[i, j] = 100 - 6.0 * i / nx
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
-        u0[i, j] = u[i, j]
+        u0[i, j] = 0.0 # u[i, j]
     for i, j in ti.ndrange(nx + 2, ny + 3):
         v[i, j] = 0.0
-        v0[i, j] = v[i, j]
+        v0[i, j] = 0.0 # v[i, j]
 
     for i, j in ti.ndrange(nx + 2, ny + 2):
         ct[i, j] = 1  # "1" stands for solid
@@ -230,8 +245,13 @@ def fill_Au():
         # ct[i-1,j] is the left cell of u[i,j]
         # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
         if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
+            # Au[k, k] = 1.0
+            # bu[k] = u[i, j]
+
+            # For pressure inlet
             Au[k, k] = 1.0
-            bu[k] = u[i, j]
+            Au[k, k+ny] = -1.0
+            bu[k] = 0.0
         # Outlet
         # ct[i,j] is the right cell of u[i,j]
         elif (ct[i, j] == 1):
@@ -328,6 +348,43 @@ def fill_Av():
         k = (i - 1) * (ny + 1) + (j - 1)
         Mv[k,k] = Av[k,k]
 
+
+@ti.kernel
+def fill_Ap():
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
+        k = (i - 1) * ny + (j - 1)
+        bp[k] = rho * (u[i, j] - u[i + 1, j]) * dy + rho * (v[i, j + 1] - v[i, j]) * dx
+        # The following change does reduce the magnitude of pcor, but is incorrect...?
+        # bp[k] = rho * (u[i, j] - u[i + 1, j]) * dy *dx + rho * (v[i, j + 1] - v[i, j]) * dx*dy
+        # Go back to Av matrix, find the corresponding v
+        vk = (i - 1) * (ny + 1) + (j - 1)
+        Ap[k, k - 1] = -rho * dx * dx / Av[vk, vk]
+        Ap[k, k + 1] = -rho * dx * dx / Av[vk + 1, vk + 1]
+        # Go back to Au matrix
+        uk = k
+        Ap[k, k - ny] = -rho * dy * dy / Au[uk, uk]
+        Ap[k, k + ny] = -rho * dy * dy / Au[uk + ny, uk + ny]
+
+        if (ct[i, j] + ct[i, j - 1]) == 0:
+            Ap[k, k - 1] = 0
+        if (ct[i, j] + ct[i, j + 1]) == 0:
+            Ap[k, k + 1] = 0
+        if (ct[i, j] + ct[i - 1, j]) == 0:
+            Ap[k, k - ny] = 0
+        if (ct[i, j] + ct[i + 1, j]) == 0:
+            Ap[k, k + ny] = 0
+        Ap[k, k] = -Ap[k, k - 1] - Ap[k, k + 1] - Ap[k, k - ny] - Ap[k, k + ny]
+        # if k==0:
+        #     print(Ap[k,k-1], Ap[k,k+1], Ap[k,k-ny], Ap[k,k+ny], Ap[k,k])
+        Mp[k, k] = Ap[k, k]
+        
+    # For the upper left corner p correction == 0.0.
+    Ap[0,0] = 1.0
+    Ap[0,1] = 0.0
+    Ap[0,ny] = 0.0    
+    Mp[0,0] = 1.0
+    bp[0] = 0.0
+        
 
 @ti.kernel
 def full_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: ti.template()) -> ti.f64:
@@ -663,7 +720,13 @@ def xu_back():
 @ti.kernel
 def xv_back():
     for i, j in ti.ndrange(nx, ny + 1):
-        v[i + 1, j + 1] = xv[i * ny + j]
+        v[i + 1, j + 1] = xv[i * ( ny + 1 ) + j]
+
+
+@ti.kernel
+def xp_back():
+    for i, j in ti.ndrange(nx, ny):
+        pcor[i + 1, j + 1] = xp[i * ny + j]
 
 
 def solve_momentum_jacob():
@@ -719,6 +782,60 @@ def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
     # write_matrix(Au, "Au")
     # write_matrix(Av, "Av")    
 
+
+def solve_pcorrection_bicgstab(eps, linalg_output):
+    print("    >> Now Solving pressure correction using BiCGSTAB...")
+    fill_Ap()
+
+    # write_matrix(Au, "Au")
+    # write_matrix(Av, "Av")
+    bicgstab(Ap, bp, xp, Mp, Apxp, rp, rp_tld, pp, pp_hat,
+             Appp, sp, sp_hat, tp, nx, ny, nx * ny, eps, linalg_output)
+    xp_back()
+    # write_matrix(Ap, "Ap")
+    # write_matrix(bp, "bp")
+    # write_matrix(xp, "xp")            
+    # write_matrix(pcor, "pcor")
+
+
+@ti.kernel
+def puv_correction()->ti.f64:
+    residual = 0.0
+    
+    ucor_max = 0.0
+    for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
+        k = (i - 1) * ny + (j - 1)
+        # Upper and lower boundary
+        if (ct[i - 1, j] + ct[i, j]) == 0 or (ct[i - 1, j] + ct[i, j]) == 2:
+            pass
+        else:
+            ucor[i, j] = (pcor[i - 1, j] - pcor[i, j]) * dy / Au[k, k]
+            u[i, j] = u[i, j] + ucor[i, j] * velo_rel
+            if np.abs(ucor[i, j] / (u[i, j] + 1.0e-9)) >= ucor_max:
+                ucor_max = np.abs(ucor[i, j] / (u[i, j] + 1.0e-9))
+                
+    vcor_max = 0.0
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 2)):
+        k = (i - 1) * (ny + 1) + (j - 1)
+        # Upper and lower boundary
+        if (ct[i, j] + ct[i, j - 1]) == 0 or (ct[i, j] + ct[i, j - 1]) == 2:
+            pass
+        else:
+            vcor[i, j] = (pcor[i, j] - pcor[i, j - 1]) * dx / Av[k, k]
+            v[i, j] = v[i, j] + vcor[i, j] * velo_rel
+            if np.abs(vcor[i, j] / (v[i, j] + 1.0e-9)) >= vcor_max:
+                vcor_max = np.abs(vcor[i, j] / (v[i, j] + 1.0e-9))
+
+    for i, j in ti.ndrange(nx + 2, ny + 2):
+        if ct[i, j] == 1:
+            pass
+        else:
+            p[i, j] = p[i, j] + p_rel * pcor[i, j]
+        residual += pcor[i, j] * pcor[i, j]
+    return ti.sqrt(residual)
+
+    
+    
     
 @ti.kernel        
 def post_process_field():
@@ -795,12 +912,16 @@ def correct_conserv():
 
 if __name__ == "__main__":
     init()
-    for timestep in range(1):
+    
+    # subtime_step is the iteration cycle inside a time-step.
+    # maximum steps is 50, or iteration will end when the overall residual is < 1.0e-8
+    for subtime_step in range(50):
+        r = 0.0
         start = time.time()
         #solve_momentum_jacob()
         #solve_momentum_bicg()
         # (eps, max_iterations, solver_output, linalg_output)
-        solve_momentum_bicgstab(1e-6, 50, 1, 0)
+        solve_momentum_bicgstab(1e-15, 30, 1, 0)
         print("    >> It took ", time.time()-start,"sec to solve the momentum equation.")
 
         # Use write function to output matrix as desired.    
@@ -810,8 +931,23 @@ if __name__ == "__main__":
         # print("The shape of Av is ", Av.shape)
     
         correct_conserv()
-        post_process_field()
+        solve_pcorrection_bicgstab(1e-8, 0)
 
+        r = puv_correction()
+        post_process_field()
+        if r < 1.0e-16:
+            print("    >>> The flow field has converged on this time step.")
+            break
+
+
+    write_matrix(pcor, "pcor")
+    write_matrix(p, "p")
+    write_matrix(u, "u")
+    write_matrix(v, "v")
+    write_matrix(bp, "bp")
+    # write_matrix(Ap, "Ap")
+    write_matrix(xp, "xp")            
+    
     gui = ti.GUI("velocity plot", (3*(nx+2),15*(ny+2)))
     img = np.concatenate((pcor_disp.to_numpy(), udiv_disp.to_numpy(), p_disp.to_numpy(), u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
     gui.set_image(img)
