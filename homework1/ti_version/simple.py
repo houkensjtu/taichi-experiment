@@ -70,14 +70,19 @@ ti.init(default_fp=ti.f64, arch=ti.cpu)
 # Problems with p correction:
 # 1. P correction seems to be proportional to grid size. The smaller the grid, the bigger the correction.
 #    => My current explanation: the fix velocity inlet is creating 2 singular point on the corner, and
-#       generating unlimited source of p correction. Therefore, switched to neumann boundary for both
-#       inlet and outlet velocity. Pressure on the inlet is fixed ( p correction on the corner is zero).
-#    => Under-relaxation coef for p can be ~0.1. It seems that momentum eqn. needs to be solved to a
-#       relative low residual in order to ensure convergence (currently 1.0e-15, 30 cycles).
+#       generating unlimited source of p correction.
+#    => OpenFOAM's simpleFOAM showed similar trend, the pressure on the corner will grow proportional
+#       to the grid size, the smaller the grid, the higher the pressure on corner.
+#    => The pressure on the inlet and outlet are fixed by setting the pressure correction to zero.
+#       See the fill_Ap() func, where Ap[i,j] = 1 and bp[] = 0.0
+#       Accordingly, u velocity on inlet and outlet are set to be zero gradient.
+#       Give the intended the pressure difference in init(), and velocity will develop itselt.
 # 2. V momentum xv_back() was wrong => Now corrected.
-# 3. Try to get the under-relaxation coef. right. The current understanding might be wrong.
-# 4. Implemented a convergence checker in puv_correction: simply add up pcor in every cell and return its
-#    norm as a indicator for convergence.
+# 3. The under-relaxation of velocity was wrong. Velocity correction does NOT need any relaxation.
+#    Instead, under relax the velocity change inside the solving of momentum eqn.
+#    This is implemented in the xu_back() and xv_back().
+# 4. Implemented a convergence checker in puv_correction: return the max p correction.
+
 
 lx = 0.5
 ly = 0.1
@@ -91,11 +96,11 @@ rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 1000000000
+dt = 0.01
 
 # Relaxation factors
-velo_rel = 0.08
-p_rel = 0.05
+velo_rel = 0.5
+p_rel = 0.0008
 
 # Add 1 cell padding to all directions.
 p = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
@@ -208,6 +213,7 @@ ti.root.dense(ti.i, nx * ny).place(bp, xp, Apxp, rp, rp_tld, pp, pp_hat, Appp, s
 @ti.kernel
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
+        # Give the intended pressure drop here
         p[i, j] = 100 - 6.0 * i / nx
     for i, j in ti.ndrange(nx + 3, ny + 2):
         u[i, j] = 1.0
@@ -378,12 +384,20 @@ def fill_Ap():
         #     print(Ap[k,k-1], Ap[k,k+1], Ap[k,k-ny], Ap[k,k+ny], Ap[k,k])
         Mp[k, k] = Ap[k, k]
         
-    # For the upper left corner p correction == 0.0.
-    Ap[0,0] = 1.0
-    Ap[0,1] = 0.0
-    Ap[0,ny] = 0.0    
-    Mp[0,0] = 1.0
-    bp[0] = 0.0
+    # Inlet and outlet pressure correction all equal zero. (Fixed pressure)
+    for i,j in ti.ndrange(ny, nx * ny):
+        if i == j:
+            # Inlet
+            Ap[i, j] = 1.0
+            Mp[i, j] = 1.0
+            bp[j] = 0.0
+            # Outlet
+            Ap[nx * ny - i, nx * ny - j] = 1.0                        
+            Mp[nx * ny - i, nx * ny - j] = 1.0                        
+            bp[nx*ny - j] = 0.0
+        else:
+            Ap[i, j] = 0.0
+            Mp[i, j] = 0.0            
         
 
 @ti.kernel
@@ -714,13 +728,18 @@ def bicgstab(A:ti.template(),
 @ti.kernel
 def xu_back():
     for i, j in ti.ndrange(nx + 1, ny):
-        u[i + 1, j + 1] = xu[i * ny + j]
+        # u[i + 1, j + 1] = xu[i * ny + j]
+        # New velocity under-relaxation
+        u[i + 1, j + 1] = u[i + 1, j + 1] + velo_rel * (xu[i * ny + j] - u[i + 1, j + 1])
+            
 
 
 @ti.kernel
 def xv_back():
     for i, j in ti.ndrange(nx, ny + 1):
-        v[i + 1, j + 1] = xv[i * ( ny + 1 ) + j]
+        # v[i + 1, j + 1] = xv[i * ( ny + 1 ) + j]
+        # New velocity under-relaxation
+        v[i + 1, j + 1] = v[i + 1, j + 1] + velo_rel * (xv[i * ( ny + 1 ) + j] - v[i + 1, j + 1])
 
 
 @ti.kernel
@@ -800,7 +819,7 @@ def solve_pcorrection_bicgstab(eps, linalg_output):
 
 @ti.kernel
 def puv_correction()->ti.f64:
-    residual = 0.0
+    pcor_max = 0.0
     
     ucor_max = 0.0
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
@@ -810,7 +829,7 @@ def puv_correction()->ti.f64:
             pass
         else:
             ucor[i, j] = (pcor[i - 1, j] - pcor[i, j]) * dy / Au[k, k]
-            u[i, j] = u[i, j] + ucor[i, j] * velo_rel
+            u[i, j] = u[i, j] + ucor[i, j]
             if np.abs(ucor[i, j] / (u[i, j] + 1.0e-9)) >= ucor_max:
                 ucor_max = np.abs(ucor[i, j] / (u[i, j] + 1.0e-9))
                 
@@ -822,7 +841,7 @@ def puv_correction()->ti.f64:
             pass
         else:
             vcor[i, j] = (pcor[i, j] - pcor[i, j - 1]) * dx / Av[k, k]
-            v[i, j] = v[i, j] + vcor[i, j] * velo_rel
+            v[i, j] = v[i, j] + vcor[i, j]
             if np.abs(vcor[i, j] / (v[i, j] + 1.0e-9)) >= vcor_max:
                 vcor_max = np.abs(vcor[i, j] / (v[i, j] + 1.0e-9))
 
@@ -831,10 +850,9 @@ def puv_correction()->ti.f64:
             pass
         else:
             p[i, j] = p[i, j] + p_rel * pcor[i, j]
-        residual += pcor[i, j] * pcor[i, j]
-    return ti.sqrt(residual)
-
-    
+        if pcor[i, j] > pcor_max:
+            pcor_max = pcor[i, j]
+    return pcor_max
     
     
 @ti.kernel        
@@ -907,56 +925,67 @@ def correct_conserv():
         udiv[i, j] = (u[i, j] - u[i+1, j]) * dy + (v[i, j+1] - v[i, j]) * dx
         udiv_overall += udiv[i, j]
     # print("The overall divergence of velocity after correction is", udiv_overall)
-    
-    
+
+
+@ti.kernel
+def time_forward():
+    for i,j in ti.ndrange(nx+3, ny+2):
+        u0[i, j] = u[i, j]
+    for i,j in ti.ndrange(nx+2, ny+3):
+        v0[i, j] = v[i, j]
+
 
 if __name__ == "__main__":
     init()
     
-    # subtime_step is the iteration cycle inside a time-step.
-    # maximum steps is 50, or iteration will end when the overall residual is < 1.0e-8
-    for subtime_step in range(50):
-        r = 0.0
-        start = time.time()
-        #solve_momentum_jacob()
-        #solve_momentum_bicg()
-        # (eps, max_iterations, solver_output, linalg_output)
-        solve_momentum_bicgstab(1e-15, 30, 1, 0)
-        print("    >> It took ", time.time()-start,"sec to solve the momentum equation.")
+    for time_step in range(100):
+        # subtime_step is the iteration cycle inside a time-step.
+        # maximum steps is 50, or iteration will end when the overall residual is < 1.0e-8
+        for subtime_step in range(1000):
+            pcor_max = 0.0
+            start = time.time()
+            #solve_momentum_jacob()
+            #solve_momentum_bicg()
+            # (eps, max_iterations, solver_output, linalg_output)
+            solve_momentum_bicgstab(1e-15, 30, 0, 0)
+            print("    >> [ time =", time_step * dt, "] It took ", time.time()-start,"sec to solve the momentum equation.")
 
-        # Use write function to output matrix as desired.    
-        # write_matrix(Au, "Au")
-        # write_matrix(Av, "Av")
-        # print("THe shape of Au is ", Au.shape)
-        # print("The shape of Av is ", Av.shape)
+            # Use write function to output matrix as desired.    
+            # write_matrix(Au, "Au")
+            # write_matrix(Av, "Av")
+            # print("THe shape of Au is ", Au.shape)
+            # print("The shape of Av is ", Av.shape)
     
-        correct_conserv()
-        solve_pcorrection_bicgstab(1e-8, 0)
+            correct_conserv()
+            solve_pcorrection_bicgstab(1e-15, 0)
+            
+            pcor_max = puv_correction()
+            post_process_field()
+            print("    >> [ time =", time_step * dt, "] The current max p-correction is", pcor_max)            
+            if pcor_max < 1.0e-3:
+                print("    >> [ time =", time_step * dt, "] The flow field has converged on this time step.")
+                break
+            
+        time_forward()
+        
+        # Do not show the gui, only save the png when gui.show() is called
+        gui = ti.GUI("velocity plot", (3*(nx+2),15*(ny+2)), show_gui=False)
+        img = np.concatenate((pcor_disp.to_numpy(), udiv_disp.to_numpy(), p_disp.to_numpy(), u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
+        gui.set_image(img)
 
-        r = puv_correction()
-        post_process_field()
-        if r < 1.0e-16:
-            print("    >>> The flow field has converged on this time step.")
-            break
+        text_color = 0x3355ff
+        gui.text(content = "P correction"  , pos = (0.5,0.1), font_size = 20, color=text_color )
+        gui.text(content = "Velocity div", pos = (0.5,0.3), font_size = 20, color=text_color )
+        gui.text(content = "Pressure", pos = (0.5,0.5), font_size = 20, color=text_color )
+        gui.text(content = "U velocity", pos = (0.5,0.7), font_size = 20, color=text_color )
+        gui.text(content = "V velocity", pos = (0.5,0.9), font_size = 20, color=text_color )
+        
+        filename = "time=" + str(time_step*dt) + ".png"
+        gui.show(filename)
 
-
+    # Write the fields at the last time step
     write_matrix(pcor, "pcor")
     write_matrix(p, "p")
     write_matrix(u, "u")
     write_matrix(v, "v")
-    write_matrix(bp, "bp")
-    # write_matrix(Ap, "Ap")
-    write_matrix(xp, "xp")            
-    
-    gui = ti.GUI("velocity plot", (3*(nx+2),15*(ny+2)))
-    img = np.concatenate((pcor_disp.to_numpy(), udiv_disp.to_numpy(), p_disp.to_numpy(), u_disp.to_numpy(), v_disp.to_numpy()), axis =1)
-    gui.set_image(img)
-
-    text_color = 0x3355ff
-    gui.text(content = "P correction"  , pos = (0.5,0.1), font_size = 20, color=text_color )
-    gui.text(content = "Velocity div", pos = (0.5,0.3), font_size = 20, color=text_color )
-    gui.text(content = "Pressure", pos = (0.5,0.5), font_size = 20, color=text_color )
-    gui.text(content = "U velocity", pos = (0.5,0.7), font_size = 20, color=text_color )
-    gui.text(content = "V velocity", pos = (0.5,0.9), font_size = 20, color=text_color )
-    
-    gui.show("sample.png")
+    write_matrix(udiv, "udiv")
