@@ -96,11 +96,11 @@ rho = 1
 mu = 0.01
 dx = lx / nx
 dy = ly / ny
-dt = 0.01
+dt = 0.001
 
 # Relaxation factors
 velo_rel = 0.5
-p_rel = 0.0008
+p_rel = 0.08
 
 # Add 1 cell padding to all directions.
 p = ti.field(dtype=ti.f64, shape=(nx + 2, ny + 2))
@@ -214,9 +214,10 @@ ti.root.dense(ti.i, nx * ny).place(bp, xp, Apxp, rp, rp_tld, pp, pp_hat, Appp, s
 def init():
     for i, j in ti.ndrange(nx + 2, ny + 2):
         # Give the intended pressure drop here
-        p[i, j] = 100 - 6.0 * i / nx
+        # p[i, j] = 100 - 6.0 * i / nx
+        p[i, j] = 100 - 240.0 * i / nx        
     for i, j in ti.ndrange(nx + 3, ny + 2):
-        u[i, j] = 1.0
+        u[i, j] = 0.0
         u0[i, j] = 0.0 # u[i, j]
     for i, j in ti.ndrange(nx + 2, ny + 3):
         v[i, j] = 0.0
@@ -226,7 +227,14 @@ def init():
         ct[i, j] = 1  # "1" stands for solid
     for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
         ct[i, j] = -1  # "-1" stands for fluid
-
+        
+    for i, j in ti.ndrange(nx, ny):
+        if (((i - 64)**2 + (j - 32)**2) < 64):
+            ct[i, j] = 1
+            u[i, j] = 0
+            u0[i, j] = 0
+            v[i, j] = 0
+            v0[i, j] = 0
 
 def write_matrix(mat, name):
     print("    >> Writing matrix data to", name, ".csv ...")
@@ -242,25 +250,26 @@ def visual_matrix(mat, name):
     plt.colorbar()
     plt.show()    
 
-    
+
 @ti.kernel
 def fill_Au():
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
+        
         # Inlet
-        # ct[i-1,j] is the left cell of u[i,j]
+        # ct[i - 1, j] is the left cell of u[i,j]
         # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
-        if (ct[i - 1, j]) == 1 or (ct[i, j] + ct[i - 1, j]) == 2:
+        if ct[i - 1, j] == 1:
             # Au[k, k] = 1.0
             # bu[k] = u[i, j]
-
             # For pressure inlet
             Au[k, k] = 1.0
             Au[k, k+ny] = -1.0
             bu[k] = 0.0
+            
         # Outlet
         # ct[i,j] is the right cell of u[i,j]
-        elif (ct[i, j] == 1):
+        elif ct[i, j] == 1:
             Au[k, k] = 1.0  # Au[k-ny,k-ny]
             Au[k, k - ny] = -1.0  # -Au[k,k]
             bu[k] = 0.0
@@ -291,6 +300,7 @@ def fill_Au():
         elif (ct[i, j] + ct[i, j + 1]) == 0 and ct[i, j] != 1 and ct[i-1, j] != 1:
             Au[k, k] = Au[k, k] + Au[k, k + 1] + 2 * mu * dx/dy
             Au[k, k + 1] = 0
+            
     for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
         k = (i - 1) * ny + (j - 1)
         Mu[k,k] = Au[k,k]
@@ -398,7 +408,219 @@ def fill_Ap():
         else:
             Ap[i, j] = 0.0
             Mp[i, j] = 0.0            
+
+
+@ti.kernel
+def fill_Au_ver2():
+    for i, j in ti.ndrange((1, nx + 2), (1, ny + 1)):
+        k = (i - 1) * ny + (j - 1)
         
+        # Inlet
+        # ct[i - 1, j] is the left cell of u[i,j]
+        # ct[i,j] + ct[i-1,j] = 2 means the u is inside a block
+        if ct[i - 1, j] == 1:
+            # Au[k, k] = 1.0
+            # bu[k] = u[i, j]
+            # For pressure inlet
+            Au[k, k] = 1.0
+            Au[k, k+ny] = -1.0
+            bu[k] = 0.0
+            
+        # Outlet
+        # ct[i,j] is the right cell of u[i,j]
+        elif ct[i, j] == 1:
+            Au[k, k] = 1.0  # Au[k-ny,k-ny]
+            Au[k, k - ny] = -1.0  # -Au[k,k]
+            bu[k] = 0.0
+
+        # Upper boundary
+        # ct[i, j - 1] is the upper cell of u[i,j]
+        elif (ct[i, j] + ct[i, j - 1]) == 0:
+            # Notice that 2*mu should be followed by dx/dy.
+            Au[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 *
+                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = - Au[k, k + 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  + 2 * mu * dx/dy # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
+
+        # Lower boundary
+        elif (ct[i, j] + ct[i, j + 1]) == 0:
+            Au[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  + 2* mu * dx/dy # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
+            
+        # Normal internal cells
+        else:
+            Au[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+            Au[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 *
+                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k + 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
+            
+        Mu[k,k] = Au[k,k]
+
+    # Internal obstacle
+    for i, j in ti.ndrange((2, nx + 1), (2, ny)):
+        k = (i - 1) * ny + (j - 1)
+        
+        # For u velocity on the interface or inside the obstacle
+        if (ct[i - 1, j] + ct[i, j]) == 0 or (ct[i - 1, j] + ct[i, j]) == 2:
+            for nb in ti.static([k-ny,k-1,k+1,k+ny]):
+                Au[k, nb] = 0.0
+            Au[k, k] = 1.0
+            bu[k] = 0.0
+
+        elif (ct[i, j] + ct[i, j - 1]) == 0 or (ct[i - 1, j] + ct[i - 1, j - 1]) == 0:
+            # Notice that 2*mu should be followed by dx/dy.
+            Au[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 *
+                       (v[i - 1, j + 1] + v[i, j + 1]) * dx)  # as
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = - Au[k, k + 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  + 2 * mu * dx/dy # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
+            
+        elif (ct[i, j] + ct[i, j - 1]) == 0 or (ct[i - 1, j] + ct[i - 1, j - 1]) == 0:
+            Au[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i - 1, j] + v[i, j]) * dx)  # an
+            Au[k, k - ny] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i - 1, j]) * dy)  # aw
+            Au[k, k + ny] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 * (u[i, j] + u[i + 1, j]) * dy)  # ae
+            Au[k, k] = -Au[k, k - 1] - Au[k, k - ny] - \
+                Au[k, k + ny] + rho * dx * dy / dt  + 2* mu * dx/dy # ap
+            bu[k] = (p[i - 1, j] - p[i, j]) * dy + rho * dx * \
+                dy / dt * u0[i, j]  # <= Unsteady term
+
+
+@ti.kernel
+def fill_Av_ver2():
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 2)):
+        k = (i - 1) * (ny + 1) + (j - 1)
+        # Upper and lower boundary
+        if (ct[i, j] + ct[i, j - 1]) == 0 or (ct[i, j] + ct[i, j - 1]) == 2:
+            Av[k, k] = 1.0
+            bv[k] = v[i, j]
+        # Inlet: do not access west cell A[k,k-ny-1], treat as a wall boundary
+        elif (ct[i, j]+ct[i-1, j]) == 0:
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k + ny + 1] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 *
+                       (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - \
+                Av[k, k + ny + 1] + rho * dx * dy / dt + 2*mu*dy/dx  # ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
+        # Outlet: do not access east cell, treat as a wall boundary
+        elif (ct[i, j] + ct[i+1, j]) == 0:
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k - ny - 1] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] \
+                + rho * dx * dy / dt + 2*mu*dy/dx  # ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
+        else:
+            """
+            TODO: Didn't cover inlet and outlet boundary. Actually accessing
+            elements out of bound, for example, Av[1,-30].
+            However, since in solve_v, when convert to numpy, A[1,-30] become
+            0.0 automatically.
+            """
+            Av[k, k - 1] = -mu * dx / dy - \
+                ti.max(0, -rho * 0.5 * (v[i, j - 1] + v[i, j]) * dx)  # an
+            Av[k, k + 1] = -mu * dx / dy - \
+                ti.max(0, rho * 0.5 * (v[i, j + 1] + v[i, j]) * dx)  # as
+            Av[k, k - ny - 1] = -mu * dy / dx - \
+                ti.max(0, rho * 0.5 * (u[i, j] + u[i, j - 1]) * dy)  # aw
+            Av[k, k + ny + 1] = -mu * dy / dx - \
+                ti.max(0, -rho * 0.5 *
+                       (u[i + 1, j - 1] + u[i + 1, j]) * dy)  # ae
+            Av[k, k] = -Av[k, k - 1] - Av[k, k + 1] - Av[k, k - ny - 1] - \
+                Av[k, k + ny + 1] + rho * dx * dy / dt  # ap
+            bv[k] = (p[i, j] - p[i, j - 1]) * dx + \
+                rho * dx * dy / dt * v0[i, j]
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 2)):
+        k = (i - 1) * (ny + 1) + (j - 1)
+        Mv[k,k] = Av[k,k]
+
+
+@ti.kernel
+def fill_Ap_ver2():
+    for i, j in ti.ndrange((1, nx + 1), (1, ny + 1)):
+        k = (i - 1) * ny + (j - 1)
+        bp[k] = rho * (u[i, j] - u[i + 1, j]) * dy + rho * (v[i, j + 1] - v[i, j]) * dx
+        # The following change does reduce the magnitude of pcor, but is incorrect...?
+        # bp[k] = rho * (u[i, j] - u[i + 1, j]) * dy *dx + rho * (v[i, j + 1] - v[i, j]) * dx*dy
+        # Go back to Av matrix, find the corresponding v
+        vk = (i - 1) * (ny + 1) + (j - 1)
+        Ap[k, k - 1] = -rho * dx * dx / Av[vk, vk]
+        Ap[k, k + 1] = -rho * dx * dx / Av[vk + 1, vk + 1]
+        # Go back to Au matrix
+        uk = k
+        Ap[k, k - ny] = -rho * dy * dy / Au[uk, uk]
+        Ap[k, k + ny] = -rho * dy * dy / Au[uk + ny, uk + ny]
+
+        if (ct[i, j] + ct[i, j - 1]) == 0:
+            Ap[k, k - 1] = 0
+        if (ct[i, j] + ct[i, j + 1]) == 0:
+            Ap[k, k + 1] = 0
+        if (ct[i, j] + ct[i - 1, j]) == 0:
+            Ap[k, k - ny] = 0
+        if (ct[i, j] + ct[i + 1, j]) == 0:
+            Ap[k, k + ny] = 0
+        Ap[k, k] = -Ap[k, k - 1] - Ap[k, k + 1] - Ap[k, k - ny] - Ap[k, k + ny]
+        # if k==0:
+        #     print(Ap[k,k-1], Ap[k,k+1], Ap[k,k-ny], Ap[k,k+ny], Ap[k,k])
+        Mp[k, k] = Ap[k, k]
+        
+    # Inlet and outlet pressure correction all equal zero. (Fixed pressure)
+    for i,j in ti.ndrange(ny, nx * ny):
+        if i == j:
+            # Inlet
+            Ap[i, j] = 1.0
+            Mp[i, j] = 1.0
+            bp[j] = 0.0
+            # Outlet
+            Ap[nx * ny - i, nx * ny - j] = 1.0                        
+            Mp[nx * ny - i, nx * ny - j] = 1.0                        
+            bp[nx*ny - j] = 0.0
+        else:
+            Ap[i, j] = 0.0
+            Mp[i, j] = 0.0            
+
+            
 
 @ti.kernel
 def full_jacobian(A: ti.template(), b: ti.template(), x: ti.template(), x_new: ti.template()) -> ti.f64:
@@ -790,8 +1012,8 @@ def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
     for steps in range(max_iterations):
         if solve_output:
             print("    [", steps,"/",max_iterations, "] Iteratively solving momentum equation using BiCGSTAB...")
-        fill_Au()
-        fill_Av()
+        fill_Au_ver2()
+        fill_Av_ver2()
         bicgstab(Au, bu, xu, Mu, Auxu, ru, ru_tld, pu, pu_hat,
                  Aupu, su, su_hat, tu, nx, ny, (nx+1)*ny, eps, linalg_output)
         bicgstab(Av, bv, xv, Mv, Avxv, rv, rv_tld, pv, pv_hat,
@@ -804,7 +1026,7 @@ def solve_momentum_bicgstab(eps, max_iterations, solve_output, linalg_output):
 
 def solve_pcorrection_bicgstab(eps, linalg_output):
     print("    >> Now Solving pressure correction using BiCGSTAB...")
-    fill_Ap()
+    fill_Ap_ver2()
 
     # write_matrix(Au, "Au")
     # write_matrix(Av, "Av")
@@ -850,8 +1072,8 @@ def puv_correction()->ti.f64:
             pass
         else:
             p[i, j] = p[i, j] + p_rel * pcor[i, j]
-        if pcor[i, j] > pcor_max:
-            pcor_max = pcor[i, j]
+        if ti.abs(pcor[i, j]) > pcor_max:
+            pcor_max = ti.abs(pcor[i, j])
     return pcor_max
     
     
@@ -938,16 +1160,16 @@ def time_forward():
 if __name__ == "__main__":
     init()
     
-    for time_step in range(100):
+    for time_step in range(5000):
         # subtime_step is the iteration cycle inside a time-step.
         # maximum steps is 50, or iteration will end when the overall residual is < 1.0e-8
-        for subtime_step in range(1000):
+        for subtime_step in range(50):
             pcor_max = 0.0
             start = time.time()
             #solve_momentum_jacob()
             #solve_momentum_bicg()
             # (eps, max_iterations, solver_output, linalg_output)
-            solve_momentum_bicgstab(1e-15, 30, 0, 0)
+            solve_momentum_bicgstab(1e-8, 30, 0, 0)
             print("    >> [ time =", time_step * dt, "] It took ", time.time()-start,"sec to solve the momentum equation.")
 
             # Use write function to output matrix as desired.    
@@ -957,12 +1179,12 @@ if __name__ == "__main__":
             # print("The shape of Av is ", Av.shape)
     
             correct_conserv()
-            solve_pcorrection_bicgstab(1e-15, 0)
+            solve_pcorrection_bicgstab(1e-8, 0)
             
             pcor_max = puv_correction()
             post_process_field()
             print("    >> [ time =", time_step * dt, "] The current max p-correction is", pcor_max)            
-            if pcor_max < 1.0e-3:
+            if pcor_max < 1.0e-2:
                 print("    >> [ time =", time_step * dt, "] The flow field has converged on this time step.")
                 break
             
@@ -980,7 +1202,7 @@ if __name__ == "__main__":
         gui.text(content = "U velocity", pos = (0.5,0.7), font_size = 20, color=text_color )
         gui.text(content = "V velocity", pos = (0.5,0.9), font_size = 20, color=text_color )
         
-        filename = "time=" + str(time_step*dt) + ".png"
+        filename = "timestep" + str(time_step) + ".png"
         gui.show(filename)
 
     # Write the fields at the last time step
